@@ -7,6 +7,7 @@ import "leaflet/dist/leaflet.css";
 import iconUrl from "leaflet/dist/images/marker-icon.png";
 import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
 import shadowUrl from "leaflet/dist/images/marker-shadow.png";
+
 const DefaultIcon = L.icon({
   iconRetinaUrl,
   iconUrl,
@@ -40,11 +41,11 @@ export default function MapaLeaflet({ data }: { data: Emp[] }) {
         center={center}
         zoom={5}
         style={{ height: 420, width: "100%" }}
-        scrollWheelZoom={true}   {/* ← agora o zoom com o scroll está ligado */}
+        scrollWheelZoom={true}
       >
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution="&copy; OpenStreetMap contributors"
+          attribution="© OpenStreetMap contributors"
         />
         {points.length > 0 && <FitBounds points={points} />}
         {withCoords.map((e) => (
