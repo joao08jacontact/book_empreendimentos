@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from "react";
+import MapaLeaflet from "./components/MapaLeaflet";
+
 
 /**
  * KOLLING | Book de Fotos — Preview com upload no CADASTRO (sem backend)
@@ -846,7 +848,7 @@ export default function App() {
         {tab === "empreendimentos" && (
           <EmpreendimentosView data={empList} onUpdate={() => {}} />
         )}
-        {tab === "mapa" && <MapMock data={empList} />}
+        {tab === "mapa" && <MapaLeaflet data={empList} />}
         {tab === "cadastrar" && (
           <CadastrarView onAdd={(novo) => setEmpList((l) => [novo, ...l])} />
         )}
