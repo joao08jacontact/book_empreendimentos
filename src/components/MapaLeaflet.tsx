@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import type { LatLngExpression } from "leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -18,11 +19,11 @@ L.Marker.prototype.options.icon = DefaultIcon;
 
 type Emp = { id: string; nome: string; endereco: string; lat?: number; lng?: number };
 
-function FitBounds({ points }: { points: [number, number][] }) {
+function FitBounds({ points }: { points: LatLngExpression[] }) {
   const map = useMap();
   useEffect(() => {
     if (points.length) {
-      const bounds = L.latLngBounds(points.map(([a, b]) => L.latLng(a, b)));
+      const bounds = L.latLngBounds(points as [number, number][]);
       map.fitBounds(bounds, { padding: [40, 40] });
     }
   }, [points, map]);
@@ -31,8 +32,8 @@ function FitBounds({ points }: { points: [number, number][] }) {
 
 export default function MapaLeaflet({ data }: { data: Emp[] }) {
   const withCoords = data.filter((e) => e.lat != null && e.lng != null);
-  const points = withCoords.map((e) => [e.lat!, e.lng!] as [number, number]);
-  const center: [number, number] = points[0] ?? [-14.235, -51.9253]; // centro do Brasil, fallback
+  const points: LatLngExpression[] = withCoords.map((e) => [e.lat!, e.lng!] as [number, number]);
+  const center: LatLngExpression = points[0] ?? [-14.235, -51.9253]; // Brasil (fallback)
 
   return (
     <div className="w-full bg-white rounded-xl shadow p-4">
@@ -42,10 +43,18 @@ export default function MapaLeaflet({ data }: { data: Emp[] }) {
         style={{ height: 420, width: "100%" }}
         scrollWheelZoom={false}
       >
+        {/* OBS: algumas versões de tipagem não expõem 'attribution' em TileLayerProps.
+           Se o TypeScript reclamar, troque a linha abaixo por a versão comentada com 'as any'. */}
         <TileLayer
-          attribution='&copy; OpenStreetMap contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution="&copy; OpenStreetMap contributors"
         />
+        {/* OU, se ainda apontar erro de tipagem na Vercel, use:
+        <TileLayer
+          {...({ url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                attribution: '&copy; OpenStreetMap contributors' } as any)}
+        />
+        */}
         {points.length > 0 && <FitBounds points={points} />}
         {withCoords.map((e) => (
           <Marker key={e.id} position={[e.lat!, e.lng!]}>
