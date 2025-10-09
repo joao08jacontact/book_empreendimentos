@@ -4,7 +4,6 @@ import type { LatLngExpression } from "leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-// Corrige ícones do Leaflet no Vite
 import iconUrl from "leaflet/dist/images/marker-icon.png";
 import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
 import shadowUrl from "leaflet/dist/images/marker-shadow.png";
@@ -33,7 +32,7 @@ function FitBounds({ points }: { points: LatLngExpression[] }) {
 export default function MapaLeaflet({ data }: { data: Emp[] }) {
   const withCoords = data.filter((e) => e.lat != null && e.lng != null);
   const points: LatLngExpression[] = withCoords.map((e) => [e.lat!, e.lng!] as [number, number]);
-  const center: LatLngExpression = points[0] ?? [-14.235, -51.9253]; // Brasil (fallback)
+  const center: LatLngExpression = points[0] ?? [-14.235, -51.9253];
 
   return (
     <div className="w-full bg-white rounded-xl shadow p-4">
@@ -41,20 +40,12 @@ export default function MapaLeaflet({ data }: { data: Emp[] }) {
         center={center}
         zoom={5}
         style={{ height: 420, width: "100%" }}
-        scrollWheelZoom={false}
+        scrollWheelZoom={true}   {/* ← agora o zoom com o scroll está ligado */}
       >
-        {/* OBS: algumas versões de tipagem não expõem 'attribution' em TileLayerProps.
-           Se o TypeScript reclamar, troque a linha abaixo por a versão comentada com 'as any'. */}
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution="&copy; OpenStreetMap contributors"
         />
-        {/* OU, se ainda apontar erro de tipagem na Vercel, use:
-        <TileLayer
-          {...({ url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                attribution: '&copy; OpenStreetMap contributors' } as any)}
-        />
-        */}
         {points.length > 0 && <FitBounds points={points} />}
         {withCoords.map((e) => (
           <Marker key={e.id} position={[e.lat!, e.lng!]}>
