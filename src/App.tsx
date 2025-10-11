@@ -1,7 +1,13 @@
-// src/App.tsx (MODO TESTE: uploads simulados, sem ImgBB/Storage)
-// - Ficha técnica visível no cadastro
-// - Usuários: lista em tempo real + botão "Adicionar usuário (somente Firestore)"
+// src/App.tsx — MODO TESTE (sem Storage/ImgBB)
+// - Capa/fotos salvas como dataURL no Firestore
+// - Ficha técnica no cadastro
+// - Mapa robusto (evita NaN quando não há lat/lng)
+// - Tela Usuários com “Adicionar (Firestore)”
+// - <Account /> importado de ./components/Account
+
 import React, { useEffect, useMemo, useState } from "react";
+import Account from "./components/Account";
+
 import {
   auth,
   login,
@@ -92,9 +98,7 @@ const Sidebar: React.FC<{
   const Item = ({ to, label }: { to: Tab; label: string }) => (
     <button
       onClick={() => setTab(to)}
-      className={`w-full text-left p-3 rounded transition hover:bg-gray-100 ${
-        tab === to ? "bg-gray-100" : ""
-      }`}
+      className={`w-full text-left p-3 rounded transition hover:bg-gray-100 ${tab === to ? "bg-gray-100" : ""}`}
     >
       {label}
     </button>
@@ -104,19 +108,15 @@ const Sidebar: React.FC<{
     <aside className="w-1/3 max-w-md bg-white border-r p-4">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-lg font-semibold">Menu</h2>
-        <button onClick={onLogout} className="text-sm text-red-600">
-          Sair
-        </button>
+        <button onClick={onLogout} className="text-sm text-red-600">Sair</button>
       </div>
       <div className="space-y-2">
         <Item to="empreendimentos" label="Empreendimentos" />
         <Item to="mapa" label="Mapa" />
-        {userDoc.role === "admin" && (
-          <>
-            <Item to="cadastrar" label="Cadastrar Empreendimento" />
-            <Item to="usuarios" label="Usuários" />
-          </>
-        )}
+        {userDoc.role === "admin" && (<>
+          <Item to="cadastrar" label="Cadastrar Empreendimento" />
+          <Item to="usuarios" label="Usuários" />
+        </>)}
         <Item to="meu_usuario" label="Usuário" />
       </div>
       <div className="mt-6 text-sm text-gray-500">
@@ -187,17 +187,12 @@ const EmpreendimentosView: React.FC<{
                 {e.fotos?.length || 0} fotos
               </div>
               <div className="mt-3 flex items-center gap-3">
-                <button
-                  onClick={() => setSelected(e)}
-                  className="text-blue-600 text-sm"
-                >
+                <button onClick={() => setSelected(e)} className="text-blue-600 text-sm">
                   Abrir álbum
                 </button>
                 {isAdmin && (
                   <button
-                    onClick={() => {
-                      if (confirm("Excluir este empreendimento?")) onDelete(e.id!);
-                    }}
+                    onClick={() => { if (confirm("Excluir este empreendimento?")) onDelete(e.id!); }}
                     className="text-red-600 text-sm"
                   >
                     Excluir
@@ -249,26 +244,45 @@ const EmpreendimentosView: React.FC<{
   );
 };
 
-// ----------------- Mapa (SVG) -----------------
+// ----------------- Mapa (SVG) robusto -----------------
 const MapMock: React.FC<{ data: (Emp & { id: string })[] }> = ({ data }) => {
+  const valid = useMemo(
+    () => data.filter((e) => Number.isFinite(e.lat) && Number.isFinite(e.lng)) as (Emp & { id: string })[],
+    [data]
+  );
+
   const coords = useMemo(() => {
-    const valid = data.filter((e) => typeof e.lat === "number" && typeof e.lng === "number");
-    if (!valid.length) return [] as { id: string; x: number; y: number; nome: string }[];
-    const lats = valid.map((e) => e.lat!);
-    const lngs = valid.map((e) => e.lng!);
+    if (valid.length === 0) return [] as { id: string; x: number; y: number; nome: string }[];
+
+    const lats = valid.map((e) => e.lat as number);
+    const lngs = valid.map((e) => e.lng as number);
+
     const minLat = Math.min(...lats);
     const maxLat = Math.max(...lats);
     const minLng = Math.min(...lngs);
     const maxLng = Math.max(...lngs);
+
+    const spanLat = maxLat - minLat || 1;
+    const spanLng = maxLng - minLng || 1;
+
     const pad = 20;
-    const W = 1000,
-      H = 500;
-    return valid.map((e) => {
-      const x = pad + ((e.lng! - minLng) / Math.max(1e-6, maxLng - minLng)) * (W - 2 * pad);
-      const y = pad + (1 - (e.lat! - minLat) / Math.max(1e-6, maxLat - minLat)) * (H - 2 * pad);
-      return { id: e.id!, x, y, nome: e.nome };
-    });
-  }, [data]);
+    const W = 1000;
+    const H = 500;
+
+    const project = (lat: number, lng: number) => {
+      const x = pad + ((lng - minLng) / spanLng) * (W - 2 * pad);
+      const y = pad + (1 - (lat - minLat) / spanLat) * (H - 2 * pad);
+      return { x, y };
+    };
+
+    return valid
+      .map((e) => {
+        const { x, y } = project(e.lat as number, e.lng as number);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        return { id: e.id!, x, y, nome: e.nome };
+      })
+      .filter(Boolean) as { id: string; x: number; y: number; nome: string }[];
+  }, [valid]);
 
   return (
     <div className="space-y-4">
@@ -291,6 +305,11 @@ const MapMock: React.FC<{ data: (Emp & { id: string })[] }> = ({ data }) => {
               </text>
             </g>
           ))}
+          {coords.length === 0 && (
+            <text x="20" y="40" className="text-sm" fill="#6b7280">
+              Nenhum empreendimento com latitude/longitude cadastrados.
+            </text>
+          )}
         </svg>
       </div>
     </div>
@@ -322,9 +341,7 @@ const NumberInput = ({
 );
 
 // ----------------- Cadastrar -----------------
-const CadastrarView: React.FC<{
-  onSave: (emp: Emp) => Promise<void>;
-}> = ({ onSave }) => {
+const CadastrarView: React.FC<{ onSave: (emp: Emp) => Promise<void> }> = ({ onSave }) => {
   const [nome, setNome] = useState("");
   const [endereco, setEndereco] = useState("");
   const [lat, setLat] = useState("");
@@ -358,65 +375,36 @@ const CadastrarView: React.FC<{
       <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label className="text-sm block mb-1">Nome</label>
-          <input
-            value={nome}
-            onChange={(e) => setNome(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
+          <input value={nome} onChange={(e) => setNome(e.target.value)} className="w-full border p-2 rounded" />
         </div>
         <div>
           <label className="text-sm block mb-1">Endereço</label>
-          <input
-            value={endereco}
-            onChange={(e) => setEndereco(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
+          <input value={endereco} onChange={(e) => setEndereco(e.target.value)} className="w-full border p-2 rounded" />
         </div>
         <div>
           <label className="text-sm block mb-1">Latitude</label>
-          <input
-            value={lat}
-            onChange={(e) => setLat(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
+          <input value={lat} onChange={(e) => setLat(e.target.value)} className="w-full border p-2 rounded" />
         </div>
         <div>
           <label className="text-sm block mb-1">Longitude</label>
-          <input
-            value={lng}
-            onChange={(e) => setLng(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
+          <input value={lng} onChange={(e) => setLng(e.target.value)} className="w-full border p-2 rounded" />
         </div>
         <div className="md:col-span-2">
           <label className="text-sm block mb-1">Descrição</label>
-          <textarea
-            value={descricao}
-            onChange={(e) => setDescricao(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
+          <textarea value={descricao} onChange={(e) => setDescricao(e.target.value)} className="w-full border p-2 rounded" />
         </div>
       </div>
 
-      {/* FICHA TÉCNICA */}
       <div className="bg-white rounded-xl shadow p-4 mt-6">
         <h2 className="font-medium mb-3">Ficha técnica</h2>
         <div className="grid gap-3 md:grid-cols-3">
           <div>
             <label className="text-sm block mb-1">Unidade</label>
-            <input
-              value={unidade}
-              onChange={(e) => setUnidade(e.target.value)}
-              className="w-full border p-2 rounded"
-            />
+            <input value={unidade} onChange={(e) => setUnidade(e.target.value)} className="w-full border p-2 rounded" />
           </div>
           <div>
             <label className="text-sm block mb-1">Nº Unidade</label>
-            <input
-              value={nUnidade}
-              onChange={(e) => setNUnidade(e.target.value)}
-              className="w-full border p-2 rounded"
-            />
+            <input value={nUnidade} onChange={(e) => setNUnidade(e.target.value)} className="w-full border p-2 rounded" />
           </div>
           <NumberInput label="Área M² Privativa" value={areaPriv} setValue={setAreaPriv} />
           <NumberInput label="Área M² Comum" value={areaComum} setValue={setAreaComum} />
@@ -428,16 +416,10 @@ const CadastrarView: React.FC<{
           <NumberInput label="Entrada (R$)" value={entrada} setValue={setEntrada} step={1} />
           <NumberInput label="Reforço (R$)" value={reforco} setValue={setReforco} step={1} />
           <NumberInput label="Parcelas (R$)" value={parcelas} setValue={setParcelas} step={1} />
-          <NumberInput
-            label="Entrega das Chaves (R$)"
-            value={entrega}
-            setValue={setEntrega}
-            step={1}
-          />
+          <NumberInput label="Entrega das Chaves (R$)" value={entrega} setValue={setEntrega} step={1} />
         </div>
       </div>
 
-      {/* CAPA */}
       <div className="bg-white rounded-xl shadow p-4 mt-6">
         <h2 className="font-medium mb-3">Capa</h2>
         <div className="flex items-center gap-3">
@@ -465,7 +447,6 @@ const CadastrarView: React.FC<{
         )}
       </div>
 
-      {/* ÁLBUM */}
       <div className="bg-white rounded-xl shadow p-4 mt-6">
         <h2 className="font-medium mb-3">Álbum de fotos</h2>
         <div className="flex items-center gap-2 flex-wrap">
@@ -532,6 +513,7 @@ const CadastrarView: React.FC<{
               entrega_chaves_rs: entrega ? Number(entrega) : undefined,
               fotos: [],
             };
+
             const newId = await addEmpreendimento(emp);
 
             const capaUrl = capaDataURL || "/assets/mock.jpg";
@@ -542,27 +524,11 @@ const CadastrarView: React.FC<{
               fotos: fotosSubidas,
             });
 
-            // reset
-            setNome("");
-            setEndereco("");
-            setLat("");
-            setLng("");
-            setDescricao("");
-            setUnidade("");
-            setNUnidade("");
-            setAreaPriv("");
-            setAreaComum("");
-            setAreaAberta("");
-            setTotalM2("");
-            setAreaInt("");
-            setAreaExt("");
-            setTotalRs("");
-            setEntrada("");
-            setReforco("");
-            setParcelas("");
-            setEntrega("");
-            setCapaDataURL("");
-            setAlbum([]);
+            setNome(""); setEndereco(""); setLat(""); setLng(""); setDescricao("");
+            setUnidade(""); setNUnidade(""); setAreaPriv(""); setAreaComum("");
+            setAreaAberta(""); setTotalM2(""); setAreaInt(""); setAreaExt("");
+            setTotalRs(""); setEntrada(""); setReforco(""); setParcelas(""); setEntrega("");
+            setCapaDataURL(""); setAlbum([]);
 
             alert("Empreendimento salvo!");
           } finally {
@@ -583,7 +549,6 @@ const UsuariosAdminView: React.FC = () => {
   const [list, setList] = useState<{ id: string; data: AppUserDoc }[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // formulário para adicionar doc na coleção `users` (somente Firestore)
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"admin" | "user">("user");
@@ -605,52 +570,28 @@ const UsuariosAdminView: React.FC = () => {
     <div className="max-w-4xl">
       <h1 className="text-2xl font-semibold mb-4">Usuários</h1>
       <p className="text-sm text-gray-500 mb-4">
-        <b>Adicionar usuário (somente Firestore)</b>: este botão só cria/edita o documento na
-        coleção <code>users</code>. Para permitir login, crie o usuário também em
-        <i> Authentication &rarr; Users</i> no Console do Firebase. Depois,
-        ajuste o perfil (role e "troca obrigatória") aqui.
+        <b>Adicionar usuário (somente Firestore)</b>: este botão só cria/edita o documento na coleção <code>users</code>.
+        Para permitir login, crie o usuário também em <i>Authentication → Users</i> no Console do Firebase.
       </p>
 
-      {/* Adicionar */}
       <div className="bg-white rounded-xl shadow p-4 mb-6">
         <h2 className="font-medium mb-3">Adicionar/Atualizar usuário (Firestore)</h2>
         <div className="grid md:grid-cols-4 gap-3">
-          <input
-            placeholder="Nome"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="border p-2 rounded"
-          />
-          <input
-            placeholder="E-mail"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="border p-2 rounded"
-          />
-        <select
-            value={role}
-            onChange={(e) => setRole(e.target.value as "admin" | "user")}
-            className="border p-2 rounded"
-          >
+          <input placeholder="Nome" value={name} onChange={(e) => setName(e.target.value)} className="border p-2 rounded" />
+          <input placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} className="border p-2 rounded" />
+          <select value={role} onChange={(e) => setRole(e.target.value as "admin" | "user")} className="border p-2 rounded">
             <option value="user">user</option>
             <option value="admin">admin</option>
           </select>
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={mustChange}
-              onChange={(e) => setMustChange(e.target.checked)}
-            />
+            <input type="checkbox" checked={mustChange} onChange={(e) => setMustChange(e.target.checked)} />
             Troca obrigatória?
           </label>
         </div>
         <button
           disabled={saving}
           onClick={async () => {
-            if (!email) {
-              alert("Informe ao menos o e-mail.");
-              return;
-            }
+            if (!email) { alert("Informe ao menos o e-mail."); return; }
             setSaving(true);
             try {
               await addDoc(collection(db, "users"), {
@@ -659,13 +600,8 @@ const UsuariosAdminView: React.FC = () => {
                 role,
                 mustChangePassword: mustChange,
               });
-              setName("");
-              setEmail("");
-              setRole("user");
-              setMustChange(true);
-            } finally {
-              setSaving(false);
-            }
+              setName(""); setEmail(""); setRole("user"); setMustChange(true);
+            } finally { setSaving(false); }
           }}
           className="mt-3 px-3 py-2 bg-blue-600 text-white rounded"
         >
@@ -684,120 +620,29 @@ const UsuariosAdminView: React.FC = () => {
             </tr>
           </thead>
           <tbody>
-            {loading && (
-              <tr>
-                <td className="py-3" colSpan={4}>
-                  Carregando...
+            {loading && <tr><td className="py-3" colSpan={4}>Carregando...</td></tr>}
+            {!loading && list.map(({ id, data }) => (
+              <tr key={id} className="border-t">
+                <td className="py-2">{data.name}</td>
+                <td className="py-2">{data.email}</td>
+                <td className="py-2">{data.role}</td>
+                <td className="py-2">
+                  {data.mustChangePassword ? "Sim" : "Não"}{" "}
+                  <button
+                    onClick={async () => {
+                      await updateDoc(docRef(getFirestore(), "users", id), {
+                        mustChangePassword: !data.mustChangePassword,
+                      });
+                    }}
+                    className="ml-3 text-blue-600"
+                  >
+                    Alternar
+                  </button>
                 </td>
               </tr>
-            )}
-            {!loading &&
-              list.map(({ id, data }) => (
-                <tr key={id} className="border-t">
-                  <td className="py-2">{data.name}</td>
-                  <td className="py-2">{data.email}</td>
-                  <td className="py-2">{data.role}</td>
-                  <td className="py-2">
-                    {data.mustChangePassword ? "Sim" : "Não"}{" "}
-                    <button
-                      onClick={async () => {
-                        await updateDoc(docRef(getFirestore(), "users", id), {
-                          mustChangePassword: !data.mustChangePassword,
-                        });
-                      }}
-                      className="ml-3 text-blue-600"
-                    >
-                      Alternar
-                    </button>
-                  </td>
-                </tr>
-              ))}
+            ))}
           </tbody>
         </table>
-      </div>
-    </div>
-  );
-};
-
-// ----------------- Minha Conta -----------------
-const Account: React.FC = () => {
-  const [currentPwd, setCurrentPwd] = useState("");
-  const [newPwd, setNewPwd] = useState("");
-  const [confirmPwd, setConfirmPwd] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg(null);
-
-    if (newPwd !== confirmPwd) setMsg("Confirmação diferente da nova senha.");
-
-    try {
-      setLoading(true);
-      const user = auth.currentUser;
-      if (!user || !user.email) throw new Error("Usuário não logado.");
-
-      const cred = EmailAuthProvider.credential(user.email, currentPwd);
-      await reauthenticateWithCredential(user, cred);
-      await updatePassword(user, newPwd);
-      // não mexe mustChange aqui (modo teste)
-
-      setMsg("Senha atualizada com sucesso.");
-      setCurrentPwd("");
-      setNewPwd("");
-      setConfirmPwd("");
-    } catch (err: any) {
-      const code = err?.code || "";
-      if (code === "auth/wrong-password") setMsg("Senha atual incorreta.");
-      else if (code === "auth/weak-password") setMsg("Nova senha muito fraca.");
-      else if (code === "auth/too-many-requests") setMsg("Muitas tentativas. Tente mais tarde.");
-      else if (code === "auth/requires-recent-login") setMsg("Faça login novamente e tente de novo.");
-      else setMsg(err?.message || "Erro ao atualizar a senha.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="max-w-md">
-      <h1 className="text-2xl font-semibold mb-4">Minha conta</h1>
-      <div className="bg-white rounded-xl shadow p-4">
-        <h2 className="font-medium mb-2">Alterar senha</h2>
-        <form onSubmit={onSubmit} className="space-y-3">
-          <input
-            type="password"
-            placeholder="Senha atual"
-            value={currentPwd}
-            onChange={(e) => setCurrentPwd(e.target.value)}
-            className="border p-2 rounded w-full"
-            required
-          />
-          <input
-            type="password"
-            placeholder="Nova senha"
-            value={newPwd}
-            onChange={(e) => setNewPwd(e.target.value)}
-            className="border p-2 rounded w-full"
-            required
-          />
-          <input
-            type="password"
-            placeholder="Confirmar nova senha"
-            value={confirmPwd}
-            onChange={(e) => setConfirmPwd(e.target.value)}
-            className="border p-2 rounded w-full"
-            required
-          />
-          <button
-            type="submit"
-            disabled={loading}
-            className="px-4 py-2 rounded bg-black text-white"
-          >
-            {loading ? "Salvando..." : "Salvar nova senha"}
-          </button>
-        </form>
-        {msg && <p className="text-sm mt-2">{msg}</p>}
       </div>
     </div>
   );
@@ -815,13 +660,9 @@ const Login: React.FC = () => {
         onSubmit={async (e) => {
           e.preventDefault();
           setLoading(true);
-          try {
-            await login(email, password);
-          } catch (e: any) {
-            alert(e?.message || "Erro ao entrar");
-          } finally {
-            setLoading(false);
-          }
+          try { await login(email, password); }
+          catch (e: any) { alert(e?.message || "Erro ao entrar"); }
+          finally { setLoading(false); }
         }}
         className="bg-white p-8 rounded-2xl w-full max-w-sm shadow-xl border border-gray-200"
       >
@@ -829,22 +670,10 @@ const Login: React.FC = () => {
           <h1 className="text-2xl font-bold">Kolling | Book de Empreendimentos</h1>
         </div>
         <label className="block text-sm mb-1">E-mail</label>
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full mb-4 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]"
-        />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} className="w-full mb-4 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
         <label className="block text-sm mb-1">Senha</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full mb-6 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]"
-        />
-        <button
-          disabled={loading}
-          className="w-full py-2 rounded bg-black text-white hover:opacity-90 disabled:opacity-60"
-        >
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full mb-6 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
+        <button disabled={loading} className="w-full py-2 rounded bg-black text-white hover:opacity-90 disabled:opacity-60">
           {loading ? "Entrando..." : "Entrar"}
         </button>
       </form>
@@ -865,24 +694,13 @@ export default function App() {
 
   useEffect(() => {
     const unsub = listenAuth(async (u) => {
-      if (!u) {
-        setUserDoc(null);
-        setFirebaseReady(true);
-        return;
-      }
-      // Busca/garante doc do usuário
+      if (!u) { setUserDoc(null); setFirebaseReady(true); return; }
       let doc = await getUserDoc(u.uid);
       if (!doc) {
-        doc = {
-          name: u.email?.split("@")[0] || "Usuário",
-          email: u.email || "",
-          role: "user",
-          mustChangePassword: false,
-        };
+        doc = { name: u.email?.split("@")[0] || "Usuário", email: u.email || "", role: "user", mustChangePassword: false };
         await ensureUserDoc(u.uid, doc);
       }
-      setUserDoc(doc);
-      setFirebaseReady(true);
+      setUserDoc(doc); setFirebaseReady(true);
     });
     return () => unsub();
   }, []);
@@ -899,12 +717,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex bg-gray-100">
-      <Sidebar
-        tab={effectiveTab}
-        setTab={setTab}
-        onLogout={() => logout()}
-        userDoc={userDoc!}
-      />
+      <Sidebar tab={effectiveTab} setTab={setTab} onLogout={() => logout()} userDoc={userDoc!} />
 
       <main className="flex-1 p-6">
         {effectiveTab === "empreendimentos" && (
@@ -912,11 +725,8 @@ export default function App() {
             data={empList}
             isAdmin={userDoc?.role === "admin"}
             onDelete={async (id) => {
-              try {
-                await deleteEmpreendimento(id);
-              } catch (e: any) {
-                alert(e?.message || "Erro ao excluir");
-              }
+              try { await deleteEmpreendimento(id); }
+              catch (e: any) { alert(e?.message || "Erro ao excluir"); }
             }}
           />
         )}
@@ -924,11 +734,7 @@ export default function App() {
         {effectiveTab === "mapa" && <MapMock data={empList} />}
 
         {effectiveTab === "cadastrar" && userDoc?.role === "admin" && (
-          <CadastrarView
-            onSave={async (emp) => {
-              await addEmpreendimento(emp);
-            }}
-          />
+          <CadastrarView onSave={async (emp) => { await addEmpreendimento(emp); }} />
         )}
 
         {effectiveTab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
