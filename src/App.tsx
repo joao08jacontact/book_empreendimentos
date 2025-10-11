@@ -1,4 +1,4 @@
-// src/App.tsx
+// src/App.tsx (MODO TESTE: uploads simulados, sem ImgBB/Storage)
 import React, { useEffect, useMemo, useState } from "react";
 import {
   auth,
@@ -17,8 +17,6 @@ import {
   addEmpreendimento,
   deleteEmpreendimento,
 } from "./lib/firebase";
-// 👇 Helpers de upload agora vêm do ImgBB
-import { uploadCapaFromDataURL, uploadFotoFromDataURL } from "./lib/uploadToImgbb";
 
 import {
   EmailAuthProvider,
@@ -392,44 +390,6 @@ const CadastrarView: React.FC<{
       </div>
 
       <div className="bg-white rounded-xl shadow p-4 mt-6">
-        <h2 className="font-medium mb-3">Ficha técnica</h2>
-        <div className="grid gap-3 md:grid-cols-3">
-          <div>
-            <label className="text-sm block mb-1">Unidade</label>
-            <input
-              value={unidade}
-              onChange={(e) => setUnidade(e.target.value)}
-              className="w-full border p-2 rounded"
-            />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Nº Unidade</label>
-            <input
-              value={nUnidade}
-              onChange={(e) => setNUnidade(e.target.value)}
-              className="w-full border p-2 rounded"
-            />
-          </div>
-          <NumberInput label="Área M² Privativa" value={areaPriv} setValue={setAreaPriv} />
-          <NumberInput label="Área M² Comum" value={areaComum} setValue={setAreaComum} />
-          <NumberInput label="Área M² Aberta" value={areaAberta} setValue={setAreaAberta} />
-          <NumberInput label="Total M²" value={totalM2} setValue={setTotalM2} />
-          <NumberInput label="Área Interna (R$)" value={areaInt} setValue={setAreaInt} step={1} />
-          <NumberInput label="Área Externa (R$)" value={areaExt} setValue={setAreaExt} step={1} />
-          <NumberInput label="Total (R$)" value={totalRs} setValue={setTotalRs} step={1} />
-          <NumberInput label="Entrada (R$)" value={entrada} setValue={setEntrada} step={1} />
-          <NumberInput label="Reforço (R$)" value={reforco} setValue={setReforco} step={1} />
-          <NumberInput label="Parcelas (R$)" value={parcelas} setValue={setParcelas} step={1} />
-          <NumberInput
-            label="Entrega das Chaves (R$)"
-            value={entrega}
-            setValue={setEntrega}
-            step={1}
-          />
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow p-4 mt-6">
         <h2 className="font-medium mb-3">Capa</h2>
         <div className="flex items-center gap-3">
           <input
@@ -470,6 +430,7 @@ const CadastrarView: React.FC<{
               setFotoLoading(true);
               try {
                 const dataURL = await resizeImage(file, { quality: 0.85 });
+                // MODO TESTE: guardamos o dataURL diretamente (sem upload externo).
                 setAlbum((arr) => [...arr, { id: uid("f"), url: dataURL, descricao: desc }]);
                 (document.getElementById("desc") as HTMLInputElement).value = "";
                 (document.getElementById("fileFoto") as HTMLInputElement).value = "";
@@ -501,7 +462,7 @@ const CadastrarView: React.FC<{
           if (!nome) return;
           setSaving(true);
           try {
-            // 1) cria doc do empreendimento
+            // 1) cria doc do empreendimento (sem capa/fotos ainda)
             const tempEmp: Emp = {
               nome,
               endereco,
@@ -525,18 +486,11 @@ const CadastrarView: React.FC<{
             };
             const newId = await addEmpreendimento(tempEmp);
 
-            // 2) envia capa -> ImgBB
-            let capaUrl: string | undefined = undefined;
-            if (capaDataURL) {
-              capaUrl = await uploadCapaFromDataURL(newId, capaDataURL);
-            }
+            // 2) MODO TESTE: capa = dataURL local (ou mock caso vazio)
+            const capaUrl = capaDataURL || "/assets/mock.jpg";
 
-            // 3) envia álbum -> ImgBB
-            const fotosSubidas: Foto[] = [];
-            for (const f of album) {
-              const url = await uploadFotoFromDataURL(newId, f.id, f.url);
-              fotosSubidas.push({ ...f, url });
-            }
+            // 3) MODO TESTE: fotos = dataURLs locais já no 'album'
+            const fotosSubidas: Foto[] = album;
 
             // 4) atualiza doc com capa e fotos
             const { getFirestore, doc, updateDoc } = await import("firebase/firestore");
