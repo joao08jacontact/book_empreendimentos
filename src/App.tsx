@@ -19,6 +19,11 @@ import {
   uploadCapaFromDataURL,
   uploadFotoFromDataURL,
 } from "./lib/firebase";
+import {
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
+} from "firebase/auth";
 
 // ----------------- utils -----------------
 function uid(prefix = "id"): string {
@@ -104,7 +109,8 @@ const Sidebar: React.FC<{
             <Item to="usuarios" label="Usuários" />
           </>
         )}
-        {userDoc.role === "user" && <Item to="meu_usuario" label="Usuário" />}
+        {/* Mostrar a página "Usuário" (Minha conta) para TODOS os perfis */}
+        <Item to="meu_usuario" label="Usuário" />
       </div>
       <div className="mt-6 text-sm text-gray-500">
         Logado como <span className="font-medium">{userDoc.name || userDoc.email}</span>
@@ -532,13 +538,8 @@ const CadastrarView: React.FC<{
             }
 
             // 4) atualiza doc com capa e fotos
-            await ensureUserDoc(newId, {} as any); // no-op (só para evitar tree-shaking em build)
+            await ensureUserDoc(newId, {} as any); // no-op
             await fetch(`/__/updateEmp?id=${newId}`, { method: "HEAD" }).catch(() => {});
-            // como não temos função HTTP, atualizamos via setDoc merge:
-            // (truque: reutilizamos addDoc acima; aqui fazemos update com fetch no-op para evitar erro em SSR)
-            // Em produção, você pode trocar por updateDoc(doc(db,"empreendimentos",newId), {...})
-
-            // fallback: simples POST via Firestore SDK
             await (await import("firebase/firestore")).updateDoc(
               (await import("firebase/firestore")).doc(
                 (await import("firebase/firestore")).getFirestore(),
@@ -591,8 +592,6 @@ const UsuariosAdminView: React.FC<{
   users: { uid: string; data: AppUserDoc }[];
   refresh: () => void;
 }> = ({ users }) => {
-  // Observação: sem Cloud Functions, a criação deve ser no Console.
-  // Aqui apenas listamos/permitimos marcar "troca obrigatória" e alterar role.
   const [updating, setUpdating] = useState<string | null>(null);
 
   return (
@@ -646,65 +645,93 @@ const UsuariosAdminView: React.FC<{
   );
 };
 
-// ----------------- Meu Usuário (corretor) -----------------
-const MeuUsuarioView: React.FC<{
-  me: AppUserDoc;
-}> = ({ me }) => {
-  const [pwd1, setPwd1] = useState("");
-  const [pwd2, setPwd2] = useState("");
-  const [saving, setSaving] = useState(false);
+// ----------------- Minha Conta (com reautenticação) -----------------
+const Account: React.FC = () => {
+  const [currentPwd, setCurrentPwd] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [confirmPwd, setConfirmPwd] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+
+    if (newPwd !== confirmPwd) {
+      setMsg("Confirmação diferente da nova senha.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const user = auth.currentUser;
+      if (!user || !user.email) throw new Error("Usuário não logado.");
+
+      // Reautenticar com a SENHA ATUAL
+      const cred = EmailAuthProvider.credential(user.email, currentPwd);
+      await reauthenticateWithCredential(user, cred);
+
+      // Atualizar senha
+      await updatePassword(user, newPwd);
+
+      // limpar flag 'mustChangePassword' se existir
+      await markMustChange(user.uid, false).catch(() => {});
+
+      setMsg("Senha atualizada com sucesso.");
+      setCurrentPwd("");
+      setNewPwd("");
+      setConfirmPwd("");
+    } catch (err: any) {
+      const code = err?.code || "";
+      if (code === "auth/wrong-password") setMsg("Senha atual incorreta.");
+      else if (code === "auth/weak-password") setMsg("Nova senha muito fraca.");
+      else if (code === "auth/too-many-requests") setMsg("Muitas tentativas. Tente mais tarde.");
+      else if (code === "auth/requires-recent-login") setMsg("Faça login novamente e tente de novo.");
+      else setMsg(err?.message || "Erro ao atualizar a senha.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <div className="max-w-md">
       <h1 className="text-2xl font-semibold mb-4">Minha conta</h1>
       <div className="bg-white rounded-xl shadow p-4">
-        <div className="mb-4">
-          <div className="text-sm text-gray-500">Nome</div>
-          <div className="font-medium">{me.name}</div>
-        </div>
-        <div className="mb-6">
-          <div className="text-sm text-gray-500">E-mail</div>
-          <div className="font-medium">{me.email}</div>
-        </div>
-
         <h2 className="font-medium mb-2">Alterar senha</h2>
-        <input
-          type="password"
-          placeholder="Nova senha"
-          value={pwd1}
-          onChange={(e) => setPwd1(e.target.value)}
-          className="border p-2 rounded w-full mb-2"
-        />
-        <input
-          type="password"
-          placeholder="Confirmar senha"
-          value={pwd2}
-          onChange={(e) => setPwd2(e.target.value)}
-          className="border p-2 rounded w-full mb-4"
-        />
-        <button
-          disabled={saving}
-          onClick={async () => {
-            if (!pwd1 || pwd1 !== pwd2) {
-              alert("As senhas não conferem.");
-              return;
-            }
-            setSaving(true);
-            try {
-              await forceChangePassword(pwd1);
-              // limpa flag de troca obrigatória no meu doc
-              if (auth.currentUser) await markMustChange(auth.currentUser.uid, false);
-              alert("Senha alterada!");
-              setPwd1("");
-              setPwd2("");
-            } finally {
-              setSaving(false);
-            }
-          }}
-          className="px-4 py-2 rounded bg-black text-white"
-        >
-          {saving ? "Salvando..." : "Salvar nova senha"}
-        </button>
+        <form onSubmit={onSubmit} className="space-y-3">
+          <input
+            type="password"
+            placeholder="Senha atual"
+            value={currentPwd}
+            onChange={(e) => setCurrentPwd(e.target.value)}
+            className="border p-2 rounded w-full"
+            required
+          />
+          <input
+            type="password"
+            placeholder="Nova senha"
+            value={newPwd}
+            onChange={(e) => setNewPwd(e.target.value)}
+            className="border p-2 rounded w-full"
+            required
+          />
+          <input
+            type="password"
+            placeholder="Confirmar nova senha"
+            value={confirmPwd}
+            onChange={(e) => setConfirmPwd(e.target.value)}
+            className="border p-2 rounded w-full"
+            required
+          />
+          <button
+            type="submit"
+            disabled={loading}
+            className="px-4 py-2 rounded bg-black text-white"
+          >
+            {loading ? "Salvando..." : "Salvar nova senha"}
+          </button>
+        </form>
+        {msg && <p className="text-sm mt-2">{msg}</p>}
       </div>
     </div>
   );
@@ -808,7 +835,7 @@ export default function App() {
   // se precisa trocar senha, força a tela "meu_usuario"
   const mustChange = userDoc?.mustChangePassword;
   const effectiveTab: Tab =
-    mustChange && userDoc?.role === "user" ? "meu_usuario" : tab;
+    mustChange ? "meu_usuario" : tab;
 
   return (
     <div className="min-h-screen flex bg-gray-100">
@@ -848,9 +875,7 @@ export default function App() {
           <UsuariosAdminView users={[]} refresh={() => {}} />
         )}
 
-        {effectiveTab === "meu_usuario" && userDoc && (
-          <MeuUsuarioView me={userDoc} />
-        )}
+        {effectiveTab === "meu_usuario" && <Account />}
       </main>
     </div>
   );
