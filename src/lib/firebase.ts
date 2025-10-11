@@ -1,103 +1,46 @@
 // src/lib/firebase.ts
+// Firebase bootstrap + helpers
+// - ignoreUndefinedProperties habilitado
+// - addEmpreendimento sanitiza campos undefined
+
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
-  updatePassword,
   User,
 } from "firebase/auth";
 import {
+  initializeFirestore,
   getFirestore,
   collection,
-  doc,
-  setDoc,
-  getDoc,
-  onSnapshot,
   addDoc,
-  deleteDoc,
-  serverTimestamp,
-  updateDoc,
-  query,
+  onSnapshot,
   orderBy,
+  query,
+  doc,
+  getDoc,
+  setDoc,
+  deleteDoc,
 } from "firebase/firestore";
-import {
-  getStorage,
-  ref,
-  uploadString,
-  getDownloadURL,
-  deleteObject,
-} from "firebase/storage";
 
-// --- Vite env (adicione as chaves na Vercel e .env local) ---
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+// ---------- Tipos ----------
+export type Foto = {
+  id: string;
+  url: string;
+  descricao?: string;
 };
 
-const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-export const storage = getStorage(app);
-
-// ---------- Auth helpers ----------
-export function listenAuth(cb: (u: User | null) => void) {
-  return onAuthStateChanged(auth, cb);
-}
-
-export async function login(email: string, password: string) {
-  return signInWithEmailAndPassword(auth, email, password);
-}
-
-export async function logout() {
-  return signOut(auth);
-}
-
-export async function forceChangePassword(newPassword: string) {
-  if (!auth.currentUser) throw new Error("Sem usuário logado");
-  await updatePassword(auth.currentUser, newPassword);
-}
-
-// ---------- Users (perfil/flags em Firestore) ----------
-export type AppRole = "admin" | "user";
-export type AppUserDoc = {
-  name: string;
-  email: string;
-  role: AppRole;
-  mustChangePassword?: boolean; // força troca após primeiro login
-};
-
-export async function ensureUserDoc(uid: string, payload: AppUserDoc) {
-  const ref = doc(db, "users", uid);
-  await setDoc(ref, { ...payload }, { merge: true });
-}
-
-export async function getUserDoc(uid: string) {
-  const ref = doc(db, "users", uid);
-  const snap = await getDoc(ref);
-  return snap.exists() ? (snap.data() as AppUserDoc) : null;
-}
-
-export async function markMustChange(uid: string, value: boolean) {
-  await updateDoc(doc(db, "users", uid), { mustChangePassword: value });
-}
-
-// ---------- Empreendimentos ----------
-export type Foto = { id: string; url: string; descricao?: string };
 export type Emp = {
   id?: string;
   nome: string;
-  endereco: string;
+  endereco?: string;
   lat?: number;
   lng?: number;
   descricao?: string;
-  capaUrl?: string;
-  fotos: Foto[];
+
+  // Ficha técnica
   unidade?: string;
   n_unidade?: string;
   area_privativa_m2?: number;
@@ -111,50 +54,88 @@ export type Emp = {
   reforco_rs?: number;
   parcelas_rs?: number;
   entrega_chaves_rs?: number;
-  createdAt?: any;
+
+  // Imagens
+  capaUrl?: string | null;
+  fotos?: Foto[];
 };
 
-export function listenEmpreendimentos(
-  cb: (docs: (Emp & { id: string })[]) => void
-) {
-  const q = query(collection(db, "empreendimentos"), orderBy("createdAt", "desc"));
+export type AppUserDoc = {
+  name: string;
+  email: string;
+  role: "admin" | "user";
+  mustChangePassword: boolean;
+};
+
+// ---------- Config ----------
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+};
+
+const app = initializeApp(firebaseConfig);
+
+// **Ignora campos undefined nos writes**
+initializeFirestore(app, { ignoreUndefinedProperties: true });
+export const db = getFirestore(app);
+
+// Auth
+export const auth = getAuth(app);
+
+// ---------- Auth helpers ----------
+export function listenAuth(cb: (u: User | null) => void) {
+  return onAuthStateChanged(auth, cb);
+}
+
+export async function login(email: string, password: string) {
+  await signInWithEmailAndPassword(auth, email, password);
+}
+
+export async function logout() {
+  await signOut(auth);
+}
+
+// ---------- Users (coleção `users`) ----------
+export async function getUserDoc(uid: string): Promise<AppUserDoc | null> {
+  const d = await getDoc(doc(db, "users", uid));
+  return d.exists() ? (d.data() as AppUserDoc) : null;
+}
+
+export async function ensureUserDoc(uid: string, data: AppUserDoc) {
+  await setDoc(doc(db, "users", uid), data, { merge: true });
+}
+
+// ---------- Empreendimentos ----------
+
+// remove undefined do nível superior
+function cleanUndefined<T extends Record<string, any>>(obj: T): T {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T;
+}
+
+export function listenEmpreendimentos(cb: (arr: (Emp & { id: string })[]) => void) {
+  const q = query(collection(db, "empreendimentos"), orderBy("nome"));
   return onSnapshot(q, (snap) => {
-    const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Emp) }));
-    cb(list);
+    const out: (Emp & { id: string })[] = [];
+    snap.forEach((d) => out.push({ id: d.id, ...(d.data() as Emp) }));
+    cb(out);
   });
 }
 
-export async function addEmpreendimento(emp: Emp) {
-  const col = collection(db, "empreendimentos");
-  const docRef = await addDoc(col, { ...emp, createdAt: serverTimestamp() });
-  return docRef.id;
+export async function addEmpreendimento(emp: Emp): Promise<string> {
+  // limpa undefined e garante defaults seguros
+  const payload = cleanUndefined({
+    ...emp,
+    capaUrl: emp.capaUrl ?? null,
+    fotos: emp.fotos ?? [],
+  });
+  const ref = await addDoc(collection(db, "empreendimentos"), payload);
+  return ref.id;
 }
 
 export async function deleteEmpreendimento(id: string) {
-  // apaga fotos da pasta desse empreendimento (capa + album)
-  try {
-    const capaRef = ref(storage, `empreendimentos/${id}/capa.jpg`);
-    await deleteObject(capaRef);
-  } catch {}
-  // como as fotos do álbum têm nomes variáveis, no beta não listamos;
-  // se você guardar os paths no Firestore, pode apagar cada uma aqui.
-
   await deleteDoc(doc(db, "empreendimentos", id));
-}
-
-// ---------- Upload helpers ----------
-export async function uploadCapaFromDataURL(empId: string, dataURL: string) {
-  const r = ref(storage, `empreendimentos/${empId}/capa.jpg`);
-  await uploadString(r, dataURL, "data_url");
-  return getDownloadURL(r);
-}
-
-export async function uploadFotoFromDataURL(
-  empId: string,
-  fotoId: string,
-  dataURL: string
-) {
-  const r = ref(storage, `empreendimentos/${empId}/album/${fotoId}.jpg`);
-  await uploadString(r, dataURL, "data_url");
-  return getDownloadURL(r);
 }
