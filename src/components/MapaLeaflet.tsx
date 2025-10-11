@@ -1,60 +1,87 @@
-import React from "react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
-import "leaflet/dist/leaflet.css";
-import L from "leaflet";
+// src/components/MapaLeaflet.tsx
+// Mapa real com Leaflet + OpenStreetMap
+// - Renderiza somente empreendimentos com lat/lng válidos
+// - Centraliza e faz fit nos marcadores
+// - Ícone padrão do Leaflet com URLs estáveis (CDN)
 
-type Foto = { id: string; url: string; descricao?: string };
-type Emp = {
-  id: string; nome: string; endereco: string;
-  lat?: number; lng?: number; descricao?: string; capaUrl?: string;
-  fotos: Foto[];
+import React, { useMemo } from "react";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+export type EmpMapa = {
+  id: string;
+  nome: string;
+  endereco?: string;
+  lat?: number;
+  lng?: number;
+  capaUrl?: string;
 };
 
-const markerIcon = new L.Icon({
-  iconUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  iconRetinaUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  shadowUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+// Corrige o ícone padrão quando bundlers não resolvem os assets do Leaflet
+const defaultIcon = L.icon({
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
   iconSize: [25, 41],
   iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  tooltipAnchor: [16, -28],
+  shadowSize: [41, 41],
 });
 
-export default function MapaLeaflet({ data }: { data: Emp[] }) {
-  const valid = data.filter((e) => typeof e.lat === "number" && typeof e.lng === "number");
+type Props = { empreendimentos: EmpMapa[] };
 
-  // centro default (Brasil) se não houver coords
-  const center: [number, number] =
-    valid.length ? [valid[0].lat as number, valid[0].lng as number] : [-14.23, -51.92];
+const MapaLeaflet: React.FC<Props> = ({ empreendimentos }) => {
+  // Somente pontos válidos
+  const pontos = useMemo(
+    () => empreendimentos.filter((e) => Number.isFinite(e.lat) && Number.isFinite(e.lng)) as Required<EmpMapa>[],
+    [empreendimentos]
+  );
+
+  // Centro/zoom default: Brasil
+  const center: [number, number] = [-15.788497, -47.879873]; // Brasília
+  const zoom = 4;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <h1 className="text-2xl font-semibold">Mapa de Empreendimentos</h1>
-      <p className="text-gray-600">
-        Mapa interativo (Leaflet + OpenStreetMap) — zoom com scroll e arraste.
-      </p>
-      <div className="w-full bg-white rounded-xl shadow p-2">
-        <MapContainer
-          center={center}
-          zoom={5}
-          style={{ height: 480, width: "100%" }}
-          scrollWheelZoom
-        >
-          <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-          />
-          {valid.map((e) => (
-            <Marker key={e.id} position={[e.lat!, e.lng!]} icon={markerIcon}>
-              <Popup>
-                <div className="font-medium">{e.nome}</div>
-                <div className="text-xs text-gray-600">{e.endereco}</div>
-              </Popup>
-            </Marker>
-          ))}
-        </MapContainer>
-      </div>
+      <p className="text-gray-600">Mapa interativo (Leaflet + OpenStreetMap) — zoom com scroll e arraste.</p>
+
+      <MapContainer
+        center={pontos.length ? [pontos[0].lat, pontos[0].lng] : center}
+        zoom={pontos.length ? 12 : zoom}
+        scrollWheelZoom
+        className="w-full h-[520px] rounded-xl overflow-hidden shadow"
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        {pontos.map((p) => (
+          <Marker key={p.id} position={[p.lat, p.lng]} icon={defaultIcon}>
+            <Popup>
+              <div className="space-y-1">
+                <div className="font-medium">{p.nome}</div>
+                {p.endereco && <div className="text-sm text-gray-600">{p.endereco}</div>}
+                {p.capaUrl && (
+                  <img
+                    src={p.capaUrl}
+                    alt={p.nome}
+                    style={{ width: 220, height: 120, objectFit: "cover", borderRadius: 8, marginTop: 6 }}
+                  />
+                )}
+              </div>
+            </Popup>
+          </Marker>
+        ))}
+      </MapContainer>
+
+      {pontos.length === 0 && (
+        <div className="text-sm text-gray-600">Nenhum empreendimento com latitude/longitude cadastrados.</div>
+      )}
     </div>
   );
-}
+};
+
+export default MapaLeaflet;
