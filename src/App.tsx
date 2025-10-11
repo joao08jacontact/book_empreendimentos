@@ -157,7 +157,8 @@ const EmpreendimentosView: React.FC<{
   data: (Emp & { id: string })[];
   isAdmin: boolean;
   onDelete: (id: string) => void;
-}> = ({ data, isAdmin, onDelete }) => {
+  onEdit: (emp: Emp & { id: string }) => void;
+}> = ({ data, isAdmin, onDelete, onEdit }) => {
   const [selected, setSelected] = useState<(Emp & { id: string }) | null>(null);
 
   return (
@@ -189,7 +190,7 @@ const EmpreendimentosView: React.FC<{
                 {isAdmin && (
                   <>
                     <button
-                      onClick={() => onEdit(e as any)}
+                      onClick={() => onEdit(e)}
                       className="text-emerald-700 text-sm mr-3"
                     >
                       Editar
@@ -274,12 +275,10 @@ const NumberInput = ({
 
 /* ===================== CadastrarView (corrigido) =====================
    Cole este componente no seu App.tsx no lugar do CadastrarView atual.
-   Dependências esperadas no arquivo: React, db (Firestore), firebase/firestore,
-   helper resizeImage (abaixo incluímos uma versão), uid (gerador simples).
-   Se você já possui resizeImage/uid no arquivo, mantenha as suas e remova as duplicadas.
+   (Usa os helpers uid/resizeImage já definidos acima — sem duplicar.)
 ====================================================================== */
 
-type Unidade = {
+type UnidadeForm = {
   id: string;
   titulo: string;
   area_priv_m2?: number;
@@ -298,56 +297,29 @@ type EmpreendimentoForm = {
   lng?: number;
   descricao?: string;
   capa?: string;   // DataURL em modo teste
-  unidades: Unidade[];
+  unidades: UnidadeForm[];
 };
 
-// Fallback helpers (remova se já existirem no arquivo)
-function uid(prefix='id'): string {
-  return `${prefix}_${Math.random().toString(36).slice(2,9)}`;
-}
-
-async function resizeImage(file: File, maxW=1280, maxH=1280): Promise<string> {
-  const img = document.createElement('img');
-  const url = URL.createObjectURL(file);
-  try {
-    await new Promise<void>((res, rej) => {
-      img.onload = () => res();
-      img.onerror = rej;
-      img.src = url;
-    });
-    const { width, height } = img;
-    const ratio = Math.min(maxW/width, maxH/height, 1);
-    const w = Math.round(width * ratio);
-    const h = Math.round(height * ratio);
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(img, 0, 0, w, h);
-    return canvas.toDataURL('image/jpeg', 0.9);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
 interface CadastrarViewProps {
-  editing?: EmpreendimentoForm | null;
+  editing?: EmpreendimentoForm | (Emp & { id: string }) | null;
   onSaved: () => void;
-  onCancel: () => void;
+  onCancel?: () => void;
 }
 
 function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
-  const [form, setForm] = React.useState<EmpreendimentoForm>({
-    id: editing?.id,
-    nome: editing?.nome || '',
-    endereco: editing?.endereco || '',
-    lat: editing?.lat,
-    lng: editing?.lng,
-    descricao: editing?.descricao || '',
-    capa: editing?.capa,
-    unidades: editing?.unidades || []
-  });
+  const init: EmpreendimentoForm = {
+    id: (editing as any)?.id,
+    nome: (editing as any)?.nome || '',
+    endereco: (editing as any)?.endereco || '',
+    lat: (editing as any)?.lat,
+    lng: (editing as any)?.lng,
+    descricao: (editing as any)?.descricao || '',
+    capa: (editing as any)?.capa || (editing as any)?.capaUrl,
+    unidades: (editing as any)?.unidades || []
+  };
+  const [form, setForm] = React.useState<EmpreendimentoForm>(init);
 
-  const [unidadeDraft, setUnidadeDraft] = React.useState<Unidade>({
+  const [unidadeDraft, setUnidadeDraft] = React.useState<UnidadeForm>({
     id: uid('uni'),
     titulo: '',
     area_priv_m2: undefined,
@@ -572,7 +544,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
 
       <div className="flex gap-2">
         <button className="btn-primary" onClick={salvar}>Salvar</button>
-        <button className="btn-ghost" onClick={onCancel}>Cancelar</button>
+        <button className="btn-ghost" onClick={()=> onCancel && onCancel()}>Cancelar</button>
       </div>
     </div>
   );
@@ -765,6 +737,7 @@ export default function App() {
               try { await deleteEmpreendimento(id); }
               catch (e: any) { alert(e?.message || "Erro ao excluir"); }
             }}
+            onEdit={(emp) => { setEditingEmp(emp); setTab("cadastrar"); }}
           />
         )}
 
@@ -773,7 +746,11 @@ export default function App() {
         )}
 
         {effectiveTab === "cadastrar" && userDoc?.role === "admin" && (
-          <CadastrarView isAdmin={role==="admin"} editing={editingEmp} onSaved={()=>{ setEditingEmp(null); setTab("empreendimentos"); }} />
+          <CadastrarView
+            editing={editingEmp as any}
+            onSaved={() => { setEditingEmp(null); setTab("empreendimentos"); }}
+            onCancel={() => { setEditingEmp(null); setTab("empreendimentos"); }}
+          />
         )}
 
         {effectiveTab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
