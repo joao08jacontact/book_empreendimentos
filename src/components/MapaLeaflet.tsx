@@ -1,87 +1,85 @@
-import React, { useEffect, useMemo, useState } from "react";
+// src/components/MapaLeaflet.tsx
+// Mapa real com Leaflet + OpenStreetMap
+// - Renderiza somente empreendimentos com lat/lng válidos
+// - Centraliza e faz fit nos marcadores
+// - Ícone padrão do Leaflet com URLs estáveis (CDN)
+
+import React, { useMemo } from "react";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { collection, onSnapshot, orderBy, query, CollectionReference } from "firebase/firestore";
-import { db } from "../lib/firebase";
 
-type Emp = {
+export type EmpMapa = {
   id: string;
-  nome?: string;
+  nome: string;
   endereco?: string;
   lat?: number;
   lng?: number;
   capaUrl?: string;
 };
 
-const markerIcon = new L.Icon({
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+// Corrige o ícone padrão quando bundlers não resolvem os assets do Leaflet
+const defaultIcon = L.icon({
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
   iconSize: [25, 41],
   iconAnchor: [12, 41],
   popupAnchor: [1, -34],
+  tooltipAnchor: [16, -28],
   shadowSize: [41, 41],
 });
 
-const MapaLeaflet: React.FC = () => {
-  const [items, setItems] = useState<Emp[]>([]);
+type Props = { empreendimentos: EmpMapa[] };
 
-  useEffect(() => {
-    const q = query(
-      collection(db, "empreendimentos") as CollectionReference,
-      orderBy("createdAt", "desc")
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const rows: Emp[] = [];
-      snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
-      setItems(rows);
-    });
-    return () => unsub();
-  }, []);
+const MapaLeaflet: React.FC<Props> = ({ empreendimentos }) => {
+  // Somente pontos válidos
+  const pontos = useMemo(
+    () => empreendimentos.filter((e) => Number.isFinite(e.lat) && Number.isFinite(e.lng)) as Required<EmpMapa>[],
+    [empreendimentos]
+  );
 
-  const center = useMemo<[number, number]>(() => {
-    if (items.length && items[0].lat && items[0].lng) {
-      return [items[0].lat!, items[0].lng!];
-    }
-    return [-27.5945, -48.5477]; // Floripa default
-  }, [items]);
+  // Centro/zoom default: Brasil
+  const center: [number, number] = [-15.788497, -47.879873]; // Brasília
+  const zoom = 4;
 
   return (
-    <div className="rounded-2xl overflow-hidden border">
+    <div className="space-y-3">
+      <h1 className="text-2xl font-semibold">Mapa de Empreendimentos</h1>
+      <p className="text-gray-600">Mapa interativo (Leaflet + OpenStreetMap) — zoom com scroll e arraste.</p>
+
       <MapContainer
-        center={center}
-        zoom={12}
-        style={{ height: 520, width: "100%" }}
+        center={pontos.length ? [pontos[0].lat, pontos[0].lng] : center}
+        zoom={pontos.length ? 12 : zoom}
         scrollWheelZoom
+        className="w-full h-[520px] rounded-xl overflow-hidden shadow"
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        {items.map((e) =>
-          typeof e.lat === "number" && typeof e.lng === "number" ? (
-            <Marker key={e.id} position={[e.lat, e.lng]} icon={markerIcon}>
-              <Popup>
-                <div className="w-[160px]">
-                  <div className="aspect-square w-full rounded-lg overflow-hidden border mb-2">
-                    {e.capaUrl ? (
-                      <img src={e.capaUrl} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full grid place-items-center text-gray-400 text-xs">
-                        sem capa
-                      </div>
-                    )}
-                  </div>
-                  <div className="font-semibold leading-tight">{e.nome || "Sem nome"}</div>
-                  {e.endereco && (
-                    <div className="text-xs text-gray-500">{e.endereco}</div>
-                  )}
-                </div>
-              </Popup>
-            </Marker>
-          ) : null
-        )}
+        {pontos.map((p) => (
+          <Marker key={p.id} position={[p.lat, p.lng]} icon={defaultIcon}>
+            <Popup>
+              <div className="space-y-1">
+                <div className="font-medium">{p.nome}</div>
+                {p.endereco && <div className="text-sm text-gray-600">{p.endereco}</div>}
+                {p.capaUrl && (
+                  <img
+                    src={p.capaUrl}
+                    alt={p.nome}
+                    style={{ width: 220, height: 120, objectFit: "cover", borderRadius: 8, marginTop: 6 }}
+                  />
+                )}
+              </div>
+            </Popup>
+          </Marker>
+        ))}
       </MapContainer>
+
+      {pontos.length === 0 && (
+        <div className="text-sm text-gray-600">Nenhum empreendimento com latitude/longitude cadastrados.</div>
+      )}
     </div>
   );
 };
