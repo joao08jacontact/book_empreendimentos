@@ -1,4 +1,6 @@
 // src/App.tsx (MODO TESTE: uploads simulados, sem ImgBB/Storage)
+// - Ficha técnica visível no cadastro
+// - Usuários: lista em tempo real + botão "Adicionar usuário (somente Firestore)"
 import React, { useEffect, useMemo, useState } from "react";
 import {
   auth,
@@ -7,10 +9,7 @@ import {
   listenAuth,
   getUserDoc,
   ensureUserDoc,
-  markMustChange,
-  forceChangePassword,
   AppUserDoc,
-  AppRole,
   Emp,
   Foto,
   listenEmpreendimentos,
@@ -23,6 +22,17 @@ import {
   reauthenticateWithCredential,
   updatePassword,
 } from "firebase/auth";
+
+import {
+  getFirestore,
+  collection,
+  onSnapshot,
+  orderBy,
+  query,
+  doc as docRef,
+  updateDoc,
+  addDoc,
+} from "firebase/firestore";
 
 // ----------------- utils -----------------
 function uid(prefix = "id"): string {
@@ -52,11 +62,10 @@ async function resizeImage(
   img.src = dataURL;
   await new Promise((res) => (img.onload = () => res(null)));
 
-  let { width, height } = img;
-  const ratio = Math.min(maxWidth / width, maxHeight / height, 1);
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(width * ratio);
-  canvas.height = Math.round(height * ratio);
+  const ratio = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+  canvas.width = Math.round(img.width * ratio);
+  canvas.height = Math.round(img.height * ratio);
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
@@ -108,7 +117,6 @@ const Sidebar: React.FC<{
             <Item to="usuarios" label="Usuários" />
           </>
         )}
-        {/* Mostrar a página "Usuário" (Minha conta) para TODOS os perfis */}
         <Item to="meu_usuario" label="Usuário" />
       </div>
       <div className="mt-6 text-sm text-gray-500">
@@ -241,7 +249,7 @@ const EmpreendimentosView: React.FC<{
   );
 };
 
-// ----------------- Mapa simples (SVG) -----------------
+// ----------------- Mapa (SVG) -----------------
 const MapMock: React.FC<{ data: (Emp & { id: string })[] }> = ({ data }) => {
   const coords = useMemo(() => {
     const valid = data.filter((e) => typeof e.lat === "number" && typeof e.lng === "number");
@@ -289,7 +297,7 @@ const MapMock: React.FC<{ data: (Emp & { id: string })[] }> = ({ data }) => {
   );
 };
 
-// ----------------- Cadastrar -----------------
+// ----------------- Inputs -----------------
 const NumberInput = ({
   label,
   value,
@@ -313,6 +321,7 @@ const NumberInput = ({
   </div>
 );
 
+// ----------------- Cadastrar -----------------
 const CadastrarView: React.FC<{
   onSave: (emp: Emp) => Promise<void>;
 }> = ({ onSave }) => {
@@ -389,6 +398,46 @@ const CadastrarView: React.FC<{
         </div>
       </div>
 
+      {/* FICHA TÉCNICA */}
+      <div className="bg-white rounded-xl shadow p-4 mt-6">
+        <h2 className="font-medium mb-3">Ficha técnica</h2>
+        <div className="grid gap-3 md:grid-cols-3">
+          <div>
+            <label className="text-sm block mb-1">Unidade</label>
+            <input
+              value={unidade}
+              onChange={(e) => setUnidade(e.target.value)}
+              className="w-full border p-2 rounded"
+            />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Nº Unidade</label>
+            <input
+              value={nUnidade}
+              onChange={(e) => setNUnidade(e.target.value)}
+              className="w-full border p-2 rounded"
+            />
+          </div>
+          <NumberInput label="Área M² Privativa" value={areaPriv} setValue={setAreaPriv} />
+          <NumberInput label="Área M² Comum" value={areaComum} setValue={setAreaComum} />
+          <NumberInput label="Área M² Aberta" value={areaAberta} setValue={setAreaAberta} />
+          <NumberInput label="Total M²" value={totalM2} setValue={setTotalM2} />
+          <NumberInput label="Área Interna (R$)" value={areaInt} setValue={setAreaInt} step={1} />
+          <NumberInput label="Área Externa (R$)" value={areaExt} setValue={setAreaExt} step={1} />
+          <NumberInput label="Total (R$)" value={totalRs} setValue={setTotalRs} step={1} />
+          <NumberInput label="Entrada (R$)" value={entrada} setValue={setEntrada} step={1} />
+          <NumberInput label="Reforço (R$)" value={reforco} setValue={setReforco} step={1} />
+          <NumberInput label="Parcelas (R$)" value={parcelas} setValue={setParcelas} step={1} />
+          <NumberInput
+            label="Entrega das Chaves (R$)"
+            value={entrega}
+            setValue={setEntrega}
+            step={1}
+          />
+        </div>
+      </div>
+
+      {/* CAPA */}
       <div className="bg-white rounded-xl shadow p-4 mt-6">
         <h2 className="font-medium mb-3">Capa</h2>
         <div className="flex items-center gap-3">
@@ -416,6 +465,7 @@ const CadastrarView: React.FC<{
         )}
       </div>
 
+      {/* ÁLBUM */}
       <div className="bg-white rounded-xl shadow p-4 mt-6">
         <h2 className="font-medium mb-3">Álbum de fotos</h2>
         <div className="flex items-center gap-2 flex-wrap">
@@ -430,7 +480,6 @@ const CadastrarView: React.FC<{
               setFotoLoading(true);
               try {
                 const dataURL = await resizeImage(file, { quality: 0.85 });
-                // MODO TESTE: guardamos o dataURL diretamente (sem upload externo).
                 setAlbum((arr) => [...arr, { id: uid("f"), url: dataURL, descricao: desc }]);
                 (document.getElementById("desc") as HTMLInputElement).value = "";
                 (document.getElementById("fileFoto") as HTMLInputElement).value = "";
@@ -462,14 +511,12 @@ const CadastrarView: React.FC<{
           if (!nome) return;
           setSaving(true);
           try {
-            // 1) cria doc do empreendimento (sem capa/fotos ainda)
-            const tempEmp: Emp = {
+            const emp: Emp = {
               nome,
               endereco,
               lat: lat ? Number(lat) : undefined,
               lng: lng ? Number(lng) : undefined,
               descricao,
-              fotos: [],
               unidade,
               n_unidade: nUnidade,
               area_privativa_m2: areaPriv ? Number(areaPriv) : undefined,
@@ -483,18 +530,14 @@ const CadastrarView: React.FC<{
               reforco_rs: reforco ? Number(reforco) : undefined,
               parcelas_rs: parcelas ? Number(parcelas) : undefined,
               entrega_chaves_rs: entrega ? Number(entrega) : undefined,
+              fotos: [],
             };
-            const newId = await addEmpreendimento(tempEmp);
+            const newId = await addEmpreendimento(emp);
 
-            // 2) MODO TESTE: capa = dataURL local (ou mock caso vazio)
             const capaUrl = capaDataURL || "/assets/mock.jpg";
-
-            // 3) MODO TESTE: fotos = dataURLs locais já no 'album'
             const fotosSubidas: Foto[] = album;
 
-            // 4) atualiza doc com capa e fotos
-            const { getFirestore, doc, updateDoc } = await import("firebase/firestore");
-            await updateDoc(doc(getFirestore(), "empreendimentos", newId), {
+            await updateDoc(docRef(getFirestore(), "empreendimentos", newId), {
               capaUrl: capaUrl || null,
               fotos: fotosSubidas,
             });
@@ -535,19 +578,101 @@ const CadastrarView: React.FC<{
 };
 
 // ----------------- Usuários (admin) -----------------
-const UsuariosAdminView: React.FC<{
-  users: { uid: string; data: AppUserDoc }[];
-  refresh: () => void;
-}> = ({ users }) => {
-  const [updating, setUpdating] = useState<string | null>(null);
+const UsuariosAdminView: React.FC = () => {
+  const db = getFirestore();
+  const [list, setList] = useState<{ id: string; data: AppUserDoc }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // formulário para adicionar doc na coleção `users` (somente Firestore)
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"admin" | "user">("user");
+  const [mustChange, setMustChange] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const q = query(collection(db, "users"), orderBy("email"));
+    const unsub = onSnapshot(q, (snap) => {
+      const arr: { id: string; data: AppUserDoc }[] = [];
+      snap.forEach((d) => arr.push({ id: d.id, data: d.data() as AppUserDoc }));
+      setList(arr);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [db]);
 
   return (
     <div className="max-w-4xl">
       <h1 className="text-2xl font-semibold mb-4">Usuários</h1>
       <p className="text-sm text-gray-500 mb-4">
-        Para criar / apagar usuários pela UI será preciso adicionar Firebase Cloud Functions.
-        Por ora, crie no Console do Firebase e ajuste o perfil aqui (role e “troca obrigatória”).
+        <b>Adicionar usuário (somente Firestore)</b>: este botão só cria/edita o documento na
+        coleção <code>users</code>. Para permitir login, crie o usuário também em
+        <i> Authentication &rarr; Users</i> no Console do Firebase. Depois,
+        ajuste o perfil (role e "troca obrigatória") aqui.
       </p>
+
+      {/* Adicionar */}
+      <div className="bg-white rounded-xl shadow p-4 mb-6">
+        <h2 className="font-medium mb-3">Adicionar/Atualizar usuário (Firestore)</h2>
+        <div className="grid md:grid-cols-4 gap-3">
+          <input
+            placeholder="Nome"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="border p-2 rounded"
+          />
+          <input
+            placeholder="E-mail"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="border p-2 rounded"
+          />
+        <select
+            value={role}
+            onChange={(e) => setRole(e.target.value as "admin" | "user")}
+            className="border p-2 rounded"
+          >
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+          </select>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={mustChange}
+              onChange={(e) => setMustChange(e.target.checked)}
+            />
+            Troca obrigatória?
+          </label>
+        </div>
+        <button
+          disabled={saving}
+          onClick={async () => {
+            if (!email) {
+              alert("Informe ao menos o e-mail.");
+              return;
+            }
+            setSaving(true);
+            try {
+              await addDoc(collection(db, "users"), {
+                name: name || email.split("@")[0],
+                email,
+                role,
+                mustChangePassword: mustChange,
+              });
+              setName("");
+              setEmail("");
+              setRole("user");
+              setMustChange(true);
+            } finally {
+              setSaving(false);
+            }
+          }}
+          className="mt-3 px-3 py-2 bg-blue-600 text-white rounded"
+        >
+          {saving ? "Salvando..." : "Adicionar (Firestore)"}
+        </button>
+      </div>
+
       <div className="bg-white rounded-xl shadow p-4">
         <table className="w-full text-sm">
           <thead>
@@ -559,32 +684,34 @@ const UsuariosAdminView: React.FC<{
             </tr>
           </thead>
           <tbody>
-            {users.map(({ uid, data }) => (
-              <tr key={uid} className="border-t">
-                <td className="py-2">{data.name}</td>
-                <td className="py-2">{data.email}</td>
-                <td className="py-2">{data.role}</td>
-                <td className="py-2">
-                  {data.mustChangePassword ? "Sim" : "Não"}
-                  {"  "}
-                  <button
-                    disabled={updating === uid}
-                    onClick={async () => {
-                      setUpdating(uid);
-                      try {
-                        await markMustChange(uid, !data.mustChangePassword);
-                        alert("Atualizado.");
-                      } finally {
-                        setUpdating(null);
-                      }
-                    }}
-                    className="ml-3 text-blue-600"
-                  >
-                    {updating === uid ? "..." : "Alternar"}
-                  </button>
+            {loading && (
+              <tr>
+                <td className="py-3" colSpan={4}>
+                  Carregando...
                 </td>
               </tr>
-            ))}
+            )}
+            {!loading &&
+              list.map(({ id, data }) => (
+                <tr key={id} className="border-t">
+                  <td className="py-2">{data.name}</td>
+                  <td className="py-2">{data.email}</td>
+                  <td className="py-2">{data.role}</td>
+                  <td className="py-2">
+                    {data.mustChangePassword ? "Sim" : "Não"}{" "}
+                    <button
+                      onClick={async () => {
+                        await updateDoc(docRef(getFirestore(), "users", id), {
+                          mustChangePassword: !data.mustChangePassword,
+                        });
+                      }}
+                      className="ml-3 text-blue-600"
+                    >
+                      Alternar
+                    </button>
+                  </td>
+                </tr>
+              ))}
           </tbody>
         </table>
       </div>
@@ -592,7 +719,7 @@ const UsuariosAdminView: React.FC<{
   );
 };
 
-// ----------------- Minha Conta (com reautenticação) -----------------
+// ----------------- Minha Conta -----------------
 const Account: React.FC = () => {
   const [currentPwd, setCurrentPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
@@ -614,7 +741,7 @@ const Account: React.FC = () => {
       const cred = EmailAuthProvider.credential(user.email, currentPwd);
       await reauthenticateWithCredential(user, cred);
       await updatePassword(user, newPwd);
-      await markMustChange(user.uid, false).catch(() => {});
+      // não mexe mustChange aqui (modo teste)
 
       setMsg("Senha atualizada com sucesso.");
       setCurrentPwd("");
@@ -746,12 +873,11 @@ export default function App() {
       // Busca/garante doc do usuário
       let doc = await getUserDoc(u.uid);
       if (!doc) {
-        // fallback: se não existir, cria básico
         doc = {
           name: u.email?.split("@")[0] || "Usuário",
           email: u.email || "",
           role: "user",
-          mustChangePassword: true,
+          mustChangePassword: false,
         };
         await ensureUserDoc(u.uid, doc);
       }
@@ -762,19 +888,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // Sync empreendimentos
     const unsub = listenEmpreendimentos((list) => setEmpList(list));
     return () => unsub();
   }, []);
 
   if (!firebaseReady) return null;
-
   if (!auth.currentUser) return <Login />;
 
-  // se precisa trocar senha, força a tela "meu_usuario"
-  const mustChange = userDoc?.mustChangePassword;
-  const effectiveTab: Tab =
-    mustChange ? "meu_usuario" : tab;
+  const effectiveTab: Tab = tab;
 
   return (
     <div className="min-h-screen flex bg-gray-100">
@@ -810,9 +931,7 @@ export default function App() {
           />
         )}
 
-        {effectiveTab === "usuarios" && userDoc?.role === "admin" && (
-          <UsuariosAdminView users={[]} refresh={() => {}} />
-        )}
+        {effectiveTab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
 
         {effectiveTab === "meu_usuario" && <Account />}
       </main>
