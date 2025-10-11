@@ -1,12 +1,17 @@
 // src/components/Account.tsx
 import { useState } from "react";
-import { auth } from "@/lib/firebase";
+import { auth, markMustChange } from "../lib/firebase";
 import {
   EmailAuthProvider,
   reauthenticateWithCredential,
   updatePassword,
 } from "firebase/auth";
 
+/**
+ * Tela "Minha conta" com reautenticação antes de updatePassword.
+ * - Coloque este arquivo em: src/components/Account.tsx
+ * - Garanta que ele é renderizado na rota/página de conta.
+ */
 export default function Account() {
   const [currentPwd, setCurrentPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
@@ -23,17 +28,22 @@ export default function Account() {
       return;
     }
 
-    setLoading(true);
     try {
+      setLoading(true);
       const user = auth.currentUser;
       if (!user || !user.email) throw new Error("Usuário não logado.");
 
-      // 1) Reautenticar com a SENHA ATUAL
+      // Reautenticar com a SENHA ATUAL
       const cred = EmailAuthProvider.credential(user.email, currentPwd);
       await reauthenticateWithCredential(user, cred);
 
-      // 2) Atualizar senha para a NOVA
+      // Atualizar senha para a NOVA
       await updatePassword(user, newPwd);
+
+      // (Opcional) limpar flag "mustChangePassword"
+      try {
+        await markMustChange(user.uid, false);
+      } catch {}
 
       setMsg("Senha atualizada com sucesso.");
       setCurrentPwd("");
@@ -44,6 +54,7 @@ export default function Account() {
       if (code === "auth/wrong-password") setMsg("Senha atual incorreta.");
       else if (code === "auth/weak-password") setMsg("Nova senha muito fraca.");
       else if (code === "auth/too-many-requests") setMsg("Muitas tentativas. Tente mais tarde.");
+      else if (code === "auth/requires-recent-login") setMsg("Faça login novamente e tente de novo.");
       else setMsg(err?.message || "Erro ao atualizar a senha.");
     } finally {
       setLoading(false);
