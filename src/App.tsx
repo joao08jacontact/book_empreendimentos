@@ -1,12 +1,13 @@
-// src/App.tsx — Modo teste + Mapa real (React-Leaflet) — BUILD-FIX
-// Mantém sua estrutura e corrige:
-// - funções duplicadas
-// - onEdit ausente nas props
-// - uso de 'role' solto
-// - tipo de 'editing' no CadastrarView
-// -----------------------------------------------------
+// src/App.tsx — Modo teste + Mapa real (React-Leaflet)
+// - Usa <MapaLeaflet /> (OpenStreetMap)
+// - Uploads simulados (dataURL) — sem Firebase Storage
+// - Ficha técnica completa por UNIDADE no cadastro
+// - Painel de Empreendimentos com hierarquia (Empreendimento → Unidades)
+// - Tela Usuários com “Adicionar (Firestore)”
+// - <Account /> importado
+// ----------------------------------------------------------------------
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Account from "./components/Account";
 import MapaLeaflet from "./components/MapaLeaflet";
 
@@ -21,7 +22,6 @@ import {
   Emp,
   Foto,
   listenEmpreendimentos,
-  addEmpreendimento,
   deleteEmpreendimento,
 } from "./lib/firebase";
 
@@ -34,11 +34,9 @@ import {
   doc as docRef,
   updateDoc,
   addDoc,
-  setDoc,
-  doc,
 } from "firebase/firestore";
 
-// ----------------- utils (definidos UMA vez) -----------------
+// ----------------- utils -----------------
 function uid(prefix = "id"): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -57,14 +55,14 @@ async function resizeImage(
   {
     maxWidth = 1600,
     maxHeight = 1200,
-    maxKB = 400,
-    quality = 0.85,
+    maxKB = 500,
+    quality = 0.9,
   }: { maxWidth?: number; maxHeight?: number; maxKB?: number; quality?: number } = {}
 ): Promise<string> {
   const dataURL = await fileToDataURL(file);
   const img = document.createElement("img");
   img.src = dataURL;
-  await new Promise<void>((res) => (img.onload = () => res()));
+  await new Promise((res) => (img.onload = () => res(null)));
 
   const canvas = document.createElement("canvas");
   const ratio = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
@@ -76,7 +74,7 @@ async function resizeImage(
   let out = canvas.toDataURL("image/jpeg", quality);
   const toKB = (b64: string) => Math.round((b64.length * 3) / 4 / 1024);
   let q = quality;
-  while (toKB(out) > maxKB && q > 0.4) {
+  while (toKB(out) > maxKB && q > 0.5) {
     q -= 0.1;
     out = canvas.toDataURL("image/jpeg", q);
   }
@@ -85,6 +83,38 @@ async function resizeImage(
 
 // ----------------- tipos/UI -----------------
 type Tab = "empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario";
+
+// Tudo que será salvo no Firestore quando você estiver no modo “teste” (sem Storage)
+export type Unidade = {
+  id: string;
+  titulo: string;
+  n_unidade?: string;
+  // ficha
+  area_privativa_m2?: number;
+  area_comum_m2?: number;
+  area_aberta_m2?: number;
+  total_m2?: number;
+  area_interna_rs?: number;
+  area_externa_rs?: number;
+  total_rs?: number;
+  entrada_rs?: number;
+  reforco_rs?: number;
+  parcelas_rs?: number;
+  entrega_chaves_rs?: number;
+  // album (DataURLs)
+  fotos: string[];
+};
+
+export type EmpreendimentoForm = {
+  id?: string;
+  nome: string;
+  endereco: string;
+  lat?: number;
+  lng?: number;
+  descricao?: string;
+  capa?: string; // DataURL (modo teste)
+  unidades: Unidade[];
+};
 
 // ----------------- Sidebar -----------------
 const Sidebar: React.FC<{
@@ -103,7 +133,7 @@ const Sidebar: React.FC<{
   );
 
   return (
-    <aside className="w-1/3 max-w-md bg-white border-r p-4">
+    <aside className="w-72 bg-white border-r p-4">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-lg font-semibold">Menu</h2>
         <button onClick={onLogout} className="text-sm text-red-600">Sair</button>
@@ -124,54 +154,59 @@ const Sidebar: React.FC<{
   );
 };
 
-// ----------------- Ficha técnica -----------------
-const FichaTecnica: React.FC<{ emp: Emp & { id: string } }> = ({ emp }) => {
+// ----------------- Ficha técnica (visualização somente) -----------------
+const FichaTecnica: React.FC<{ u: Partial<Unidade> }> = ({ u }) => {
   const Item = ({ label, value }: { label: string; value?: string | number }) => (
-    <div className="flex justify-between text-sm py-1">
-      <span className="text-gray-500">{label}</span>
+    <div className="grid grid-cols-[1fr_auto] gap-3 text-sm">
+      <span className="text-gray-600">{label}</span>
       <span className="font-medium">{value ?? "-"}</span>
     </div>
   );
   return (
     <div className="bg-white rounded-xl shadow p-4">
       <h3 className="font-semibold mb-3">Ficha técnica</h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
-        <Item label="Unidade" value={emp.unidade} />
-        <Item label="Nº Unidade" value={emp.n_unidade} />
-        <Item label="Área M² Privativa" value={emp.area_privativa_m2} />
-        <Item label="Área M² Comum" value={emp.area_comum_m2} />
-        <Item label="Área M² Aberta" value={emp.area_aberta_m2} />
-        <Item label="Total M²" value={emp.total_m2} />
-        <Item label="Área Interna (R$)" value={emp.area_interna_rs} />
-        <Item label="Área Externa (R$)" value={emp.area_externa_rs} />
-        <Item label="Total (R$)" value={emp.total_rs} />
-        <Item label="Entrada (R$)" value={emp.entrada_rs} />
-        <Item label="Reforço (R$)" value={emp.reforco_rs} />
-        <Item label="Parcelas (R$)" value={emp.parcelas_rs} />
-        <Item label="Entrega das Chaves (R$)" value={emp.entrega_chaves_rs} />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-2">
+        <Item label="Unidade" value={u.titulo} />
+        <Item label="Nº Unidade" value={u.n_unidade} />
+        <Item label="Área M² Privativa" value={u.area_privativa_m2} />
+        <Item label="Área M² Comum" value={u.area_comum_m2} />
+        <Item label="Área M² Aberta" value={u.area_aberta_m2} />
+        <Item label="Total M²" value={u.total_m2} />
+        <Item label="Área Interna (R$)" value={u.area_interna_rs} />
+        <Item label="Área Externa (R$)" value={u.area_externa_rs} />
+        <Item label="Total (R$)" value={u.total_rs} />
+        <Item label="Entrada (R$)" value={u.entrada_rs} />
+        <Item label="Reforço (R$)" value={u.reforco_rs} />
+        <Item label="Parcelas (R$)" value={u.parcelas_rs} />
+        <Item label="Entrega das Chaves (R$)" value={u.entrega_chaves_rs} />
       </div>
     </div>
   );
 };
 
-// ----------------- Lista/Álbum -----------------
+// ----------------- Lista/Álbum/HIERARQUIA -----------------
 const EmpreendimentosView: React.FC<{
   data: (Emp & { id: string })[];
   isAdmin: boolean;
   onDelete: (id: string) => void;
-  onEdit: (emp: Emp & { id: string }) => void;
-}> = ({ data, isAdmin, onDelete, onEdit }) => {
+  onEditRequest: (emp: Emp & { id: string }) => void;
+}> = ({ data, isAdmin, onDelete, onEditRequest }) => {
   const [selected, setSelected] = useState<(Emp & { id: string }) | null>(null);
+  const selectedUnidades: Unidade[] = useMemo(() => {
+    if (!selected) return [];
+    // Emp do Firestore pode não declarar, então tratamos como any
+    return (selected as any).unidades ?? [];
+  }, [selected]);
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Empreendimentos</h1>
+      {!selected && <h1 className="text-3xl font-semibold">Empreendimentos</h1>}
 
       {!selected && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {data.map((e) => (
-            <div key={e.id} className="bg-white rounded-xl shadow p-4">
-              <div className="aspect-video rounded-lg bg-gray-200 overflow-hidden mb-3">
+            <div key={e.id} className="bg-white rounded-2xl shadow p-4">
+              <div className="aspect-video rounded-xl bg-gray-200 overflow-hidden mb-3">
                 {e.capaUrl ? (
                   <img src={e.capaUrl} className="w-full h-full object-cover" />
                 ) : (
@@ -180,20 +215,20 @@ const EmpreendimentosView: React.FC<{
                   </div>
                 )}
               </div>
-              <div className="font-medium">{e.nome}</div>
+              <div className="font-semibold text-lg">{e.nome}</div>
               <div className="text-sm text-gray-500">{e.endereco}</div>
               <div className="text-xs text-gray-400 mt-1">
-                {e.fotos?.length || 0} fotos
+                {(e as any)?.unidades?.length ? `${(e as any).unidades.length} unidade(s)` : `${e.fotos?.length || 0} fotos`}
               </div>
-              <div className="mt-3 flex items-center gap-3">
+              <div className="mt-3 flex items-center gap-4">
                 <button onClick={() => setSelected(e)} className="text-blue-600 text-sm">
                   Abrir álbum
                 </button>
                 {isAdmin && (
                   <>
                     <button
-                      onClick={() => onEdit(e)}
-                      className="text-emerald-700 text-sm mr-3"
+                      onClick={() => onEditRequest(e)}
+                      className="text-emerald-700 text-sm"
                     >
                       Editar
                     </button>
@@ -212,36 +247,67 @@ const EmpreendimentosView: React.FC<{
       )}
 
       {selected && (
-        <div className="space-y-4">
+        <div className="space-y-6">
           <button onClick={() => setSelected(null)} className="text-sm text-blue-600">
             ← Voltar
           </button>
-          <div className="flex flex-col md:flex-row gap-6 items-start">
-            <div className="md:w-1/3 w-full">
-              <div className="rounded-lg overflow-hidden bg-gray-200 aspect-video mb-3">
-                {selected.capaUrl ? (
+
+          <div className="grid md:grid-cols-[1fr_2fr] gap-8 items-start">
+            <div>
+              <div className="rounded-xl overflow-hidden bg-gray-200 aspect-video mb-3">
+                {(selected as any).capa ? (
+                  <img src={(selected as any).capa} className="w-full h-full object-cover" />
+                ) : selected.capaUrl ? (
                   <img src={selected.capaUrl} className="w-full h-full object-cover" />
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center text-gray-500">
-                    Sem capa
-                  </div>
+                  <div className="w-full h-full flex items-center justify-center text-gray-500">Sem capa</div>
                 )}
               </div>
-              <FichaTecnica emp={selected} />
+              {/* Se houver ao menos uma unidade, mostre ficha da primeira como preview */}
+              {selectedUnidades.length > 0 && <FichaTecnica u={selectedUnidades[0]} />}
             </div>
 
-            <div className="flex-1 w-full">
-              <h2 className="text-xl font-semibold mb-2">{selected.nome}</h2>
-              <p className="text-gray-600 mb-4">{selected.endereco}</p>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                {selected.fotos?.map((f) => (
-                  <figure key={f.id} className="bg-white rounded-lg overflow-hidden shadow">
-                    <img src={f.url} className="w-full h-40 object-cover" />
-                    <figcaption className="text-sm p-2">
-                      {f.descricao || "Sem descrição"}
-                    </figcaption>
-                  </figure>
-                ))}
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-2xl font-semibold">{selected.nome}</h2>
+                <p className="text-gray-600">{selected.endereco}</p>
+              </div>
+
+              {/* Cards de UNIDADES (hierarquia) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {selectedUnidades.length === 0 && (
+                  <div className="text-gray-500">Nenhuma unidade cadastrada neste empreendimento.</div>
+                )}
+                {selectedUnidades.map((u) => {
+                  const thumb = u.fotos?.[0];
+                  return (
+                    <div key={u.id} className="bg-white rounded-xl shadow p-3">
+                      <div className="aspect-square rounded-lg overflow-hidden bg-gray-200 mb-2">
+                        {thumb ? (
+                          <img src={thumb} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-gray-500">Sem foto</div>
+                        )}
+                      </div>
+                      <div className="font-medium">{u.titulo || "Unidade"}</div>
+                      <div className="text-xs text-gray-500">{u.n_unidade ? `Nº ${u.n_unidade}` : "-"}</div>
+                      <div className="mt-2">
+                        <button
+                          className="text-blue-600 text-sm"
+                          onClick={() => {
+                            const html = (u.fotos || [])
+                              .map((f) => `<img src="${f}" style="width:180px;height:180px;object-fit:cover;margin:6px;border-radius:10px;"/>`)
+                              .join("");
+                            const w = window.open("", "_blank", "width=1000,height=700");
+                            if (w) w.document.write(`<title>Fotos</title><div style="display:flex;flex-wrap:wrap;padding:16px;background:#f7f7f7">${html}</div>`);
+                          }}
+                        >
+                          Abrir fotos ({u.fotos?.length || 0})
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -251,228 +317,321 @@ const EmpreendimentosView: React.FC<{
   );
 };
 
-// ----------------- Inputs -----------------
-const NumberInput = ({
+// ----------------- Inputs helpers -----------------
+const LabeledInput = ({
   label,
-  value,
-  setValue,
-  step = 0.01,
+  children,
+  className,
 }: {
   label: string;
-  value: string;
-  setValue: (s: string) => void;
-  step?: number;
+  children: React.ReactNode;
+  className?: string;
 }) => (
-  <div>
-    <label className="text-sm block mb-1">{label}</label>
-    <input
-      type="number"
-      step={step}
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      className="w-full border p-2 rounded"
-    />
+  <div className={className ?? ""}>
+    <label className="block text-sm font-medium mb-1">{label}</label>
+    {children}
   </div>
 );
 
-/* ===================== CadastrarView (corrigido) =====================
-   Usa os helpers uid/resizeImage acima (não duplica).
-====================================================================== */
-
-type UnidadeForm = {
-  id: string;
-  titulo: string;
-  area_priv_m2?: number;
-  area_comum_m2?: number;
-  quartos?: number;
-  suites?: number;
-  vagas?: number;
-  fotos: string[]; // DataURLs em modo teste
-};
-
-type EmpreendimentoForm = {
-  id?: string;
-  nome: string;
-  endereco: string;
-  lat?: number;
-  lng?: number;
-  descricao?: string;
-  capa?: string;   // DataURL em modo teste
-  unidades: UnidadeForm[];
-};
-
+// ----------------- CadastrarView (com FICHA por unidade) -----------------
 interface CadastrarViewProps {
-  editing?: EmpreendimentoForm | (Emp & { id: string }) | null;
+  editing?: EmpreendimentoForm | null;
   onSaved: () => void;
-  onCancel?: () => void;
+  onCancel: () => void;
 }
 
 function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
-  const init: EmpreendimentoForm = {
-    id: (editing as any)?.id,
-    nome: (editing as any)?.nome || '',
-    endereco: (editing as any)?.endereco || '',
-    lat: (editing as any)?.lat,
-    lng: (editing as any)?.lng,
-    descricao: (editing as any)?.descricao || '',
-    capa: (editing as any)?.capa || (editing as any)?.capaUrl,
-    unidades: (editing as any)?.unidades || []
-  };
-  const [form, setForm] = React.useState<EmpreendimentoForm>(init);
-
-  const [unidadeDraft, setUnidadeDraft] = React.useState<UnidadeForm>({
-    id: uid('uni'),
-    titulo: '',
-    area_priv_m2: undefined,
-    area_comum_m2: undefined,
-    quartos: undefined,
-    suites: undefined,
-    vagas: undefined,
-    fotos: []
+  const [form, setForm] = React.useState<EmpreendimentoForm>({
+    id: editing?.id,
+    nome: editing?.nome || "",
+    endereco: editing?.endereco || "",
+    lat: editing?.lat,
+    lng: editing?.lng,
+    descricao: editing?.descricao || "",
+    capa: editing?.capa,
+    unidades: editing?.unidades || [],
   });
 
-  // Eventos simples
+  const [unidadeDraft, setUnidadeDraft] = React.useState<Unidade>({
+    id: uid("uni"),
+    titulo: "",
+    n_unidade: "",
+    area_privativa_m2: undefined,
+    area_comum_m2: undefined,
+    area_aberta_m2: undefined,
+    total_m2: undefined,
+    area_interna_rs: undefined,
+    area_externa_rs: undefined,
+    total_rs: undefined,
+    entrada_rs: undefined,
+    reforco_rs: undefined,
+    parcelas_rs: undefined,
+    entrega_chaves_rs: undefined,
+    fotos: [],
+  });
+
   const onChangeField = (k: keyof EmpreendimentoForm, v: any) =>
-    setForm(prev => ({ ...prev, [k]: v }));
+    setForm((prev) => ({ ...prev, [k]: v }));
 
   const onPickCapa: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
     const dataUrl = await resizeImage(f);
-    onChangeField('capa', dataUrl);
+    onChangeField("capa", dataUrl);
   };
 
   const onPickFotoUnidade: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    const dataUrl = await resizeImage(f, { maxWidth: 1600, maxHeight: 1600 });
-    setUnidadeDraft(u => ({ ...u, fotos: [...u.fotos, dataUrl] }));
-    e.currentTarget.value = '';
+    const dataUrl = await resizeImage(f);
+    setUnidadeDraft((u) => ({ ...u, fotos: [...(u.fotos || []), dataUrl] }));
+    e.currentTarget.value = "";
   };
 
   const addUnidade = () => {
-    if (!unidadeDraft.titulo.trim()) return;
-    setForm(prev => ({ ...prev, unidades: [...prev.unidades, unidadeDraft] }));
+    if (!unidadeDraft.titulo.trim()) return alert("Informe o título da unidade.");
+    setForm((prev) => ({ ...prev, unidades: [...prev.unidades, unidadeDraft] }));
     setUnidadeDraft({
-      id: uid('uni'),
-      titulo: '',
-      area_priv_m2: undefined,
+      id: uid("uni"),
+      titulo: "",
+      n_unidade: "",
+      area_privativa_m2: undefined,
       area_comum_m2: undefined,
-      quartos: undefined,
-      suites: undefined,
-      vagas: undefined,
-      fotos: []
+      area_aberta_m2: undefined,
+      total_m2: undefined,
+      area_interna_rs: undefined,
+      area_externa_rs: undefined,
+      total_rs: undefined,
+      entrada_rs: undefined,
+      reforco_rs: undefined,
+      parcelas_rs: undefined,
+      entrega_chaves_rs: undefined,
+      fotos: [],
     });
   };
 
   const removeUnidade = (id: string) => {
-    setForm(prev => ({ ...prev, unidades: prev.unidades.filter(u => u.id !== id) }));
+    setForm((prev) => ({ ...prev, unidades: prev.unidades.filter((u) => u.id !== id) }));
   };
 
   const verFotos = (fotos: string[]) => {
-    const html = fotos.map(f => `<img src="${f}" style="width:180px;height:180px;object-fit:cover;margin:6px;border-radius:10px;"/>`).join('');
-    const w = window.open('', '_blank', 'width=1000,height=700');
+    const html = fotos
+      .map((f) => `<img src="${f}" style="width:180px;height:180px;object-fit:cover;margin:6px;border-radius:10px;"/>`)
+      .join("");
+    const w = window.open("", "_blank", "width=1000,height=700");
     if (w) {
-      w.document.write(`<title>Fotos da unidade</title><div style="display:flex;flex-wrap:wrap;padding:16px;background:#f7f7f7">${html}</div>`);
+      w.document.write(
+        `<title>Fotos da unidade</title><div style="display:flex;flex-wrap:wrap;padding:16px;background:#f7f7f7">${html}</div>`
+      );
     }
   };
 
   // Firestore (modo teste: apenas salva DataURLs, sem Storage)
   const salvar = async () => {
     const payload = { ...form };
-    if (!payload.nome.trim()) { alert('Informe o nome.'); return; }
+    if (!payload.nome.trim()) {
+      alert("Informe o nome.");
+      return;
+    }
     try {
+      const { collection, doc, setDoc, updateDoc } = await import("firebase/firestore");
+      const { db } = await import("./lib/firebase");
       if (payload.id) {
-        await updateDoc(docRef(getFirestore(), 'empreendimentos', payload.id), payload as any);
+        const ref = doc(db, "empreendimentos", payload.id);
+        await updateDoc(ref, payload as any);
       } else {
-        const id = uid('emp');
+        const id = uid("emp");
+        const ref = doc(collection(db, "empreendimentos"), id);
         payload.id = id;
-        await setDoc(doc(getFirestore(), 'empreendimentos', id), payload as any);
+        await setDoc(ref, payload as any);
       }
-      alert('Empreendimento salvo.');
+      alert("Empreendimento salvo.");
       onSaved();
     } catch (err) {
       console.error(err);
-      alert('Erro ao salvar.');
+      alert("Erro ao salvar.");
     }
   };
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="text-sm font-medium">Nome</label>
-          <input className="input" value={form.nome}
-            onChange={e => onChangeField('nome', e.target.value)} />
+      {/* Cabeçalho */}
+      <h1 className="text-3xl font-semibold">{form.id ? "Editar Empreendimento" : "Cadastrar Empreendimento"}</h1>
+
+      {/* Dados do empreendimento */}
+      <div className="bg-white rounded-2xl shadow p-6 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <LabeledInput label="Nome">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={form.nome}
+              onChange={(e) => onChangeField("nome", e.target.value)}
+            />
+          </LabeledInput>
+          <LabeledInput label="Endereço">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={form.endereco}
+              onChange={(e) => onChangeField("endereco", e.target.value)}
+            />
+          </LabeledInput>
+          <LabeledInput label="Latitude">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={form.lat ?? ""}
+              onChange={(e) => onChangeField("lat", e.target.value ? Number(e.target.value) : undefined)}
+            />
+          </LabeledInput>
+          <LabeledInput label="Longitude">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={form.lng ?? ""}
+              onChange={(e) => onChangeField("lng", e.target.value ? Number(e.target.value) : undefined)}
+            />
+          </LabeledInput>
+          <LabeledInput label="Descrição" className="md:col-span-2">
+            <textarea
+              rows={3}
+              className="w-full border rounded-lg p-2"
+              value={form.descricao}
+              onChange={(e) => onChangeField("descricao", e.target.value)}
+            />
+          </LabeledInput>
         </div>
-        <div>
-          <label className="text-sm font-medium">Endereço</label>
-          <input className="input" value={form.endereco}
-            onChange={e => onChangeField('endereco', e.target.value)} />
-        </div>
-        <div>
-          <label className="text-sm font-medium">Latitude</label>
-          <input className="input" value={form.lat ?? ''}
-            onChange={e => onChangeField('lat', e.target.value ? Number(e.target.value) : undefined)} />
-        </div>
-        <div>
-          <label className="text-sm font-medium">Longitude</label>
-          <input className="input" value={form.lng ?? ''}
-            onChange={e => onChangeField('lng', e.target.value ? Number(e.target.value) : undefined)} />
-        </div>
-        <div className="md:col-span-2">
-          <label className="text-sm font-medium">Descrição</label>
-          <textarea className="input" rows={3} value={form.descricao}
-            onChange={e => onChangeField('descricao', e.target.value)} />
+
+        <div className="rounded-xl border p-4">
+          <div className="text-lg font-semibold mb-2">Capa do empreendimento</div>
+          <input type="file" accept="image/*" onChange={onPickCapa} />
+          {form.capa && (
+            <div className="mt-3">
+              <img src={form.capa} className="w-full max-w-3xl rounded-xl object-cover aspect-[16/9]" />
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="rounded-xl border p-4">
-        <div className="text-lg font-semibold mb-2">Capa do empreendimento</div>
-        <input type="file" accept="image/*" onChange={onPickCapa} />
-        {form.capa && (
-          <div className="mt-3">
-            <img src={form.capa} className="w-full max-w-xl rounded-xl object-cover aspect-[16/9]" />
-          </div>
-        )}
-      </div>
+      {/* UNIDADE */}
+      <div className="bg-white rounded-2xl shadow p-6 space-y-4">
+        <div className="text-xl font-semibold">Unidade — Ficha técnica</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <LabeledInput label="Título">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.titulo}
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, titulo: e.target.value }))}
+            />
+          </LabeledInput>
+          <LabeledInput label="Nº Unidade">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.n_unidade ?? ""}
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, n_unidade: e.target.value }))}
+            />
+          </LabeledInput>
+          <LabeledInput label="Área M² Privativa">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_privativa_m2 ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_privativa_m2: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
 
-      <div className="rounded-xl border p-4 space-y-3">
-        <div className="text-lg font-semibold">Unidade — Ficha técnica</div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <label className="text-sm font-medium">Título</label>
-            <input className="input" value={unidadeDraft.titulo}
-              onChange={e => setUnidadeDraft(u => ({ ...u, titulo: e.target.value }))} />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Área priv. (m²)</label>
-            <input className="input" value={unidadeDraft.area_priv_m2 ?? ''}
-              onChange={e => setUnidadeDraft(u => ({ ...u, area_priv_m2: e.target.value ? Number(e.target.value) : undefined }))} />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Área comum (m²)</label>
-            <input className="input" value={unidadeDraft.area_comum_m2 ?? ''}
-              onChange={e => setUnidadeDraft(u => ({ ...u, area_comum_m2: e.target.value ? Number(e.target.value) : undefined }))} />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Quartos</label>
-            <input className="input" value={unidadeDraft.quartos ?? ''}
-              onChange={e => setUnidadeDraft(u => ({ ...u, quartos: e.target.value ? Number(e.target.value) : undefined }))} />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Suítes</label>
-            <input className="input" value={unidadeDraft.suites ?? ''}
-              onChange={e => setUnidadeDraft(u => ({ ...u, suites: e.target.value ? Number(e.target.value) : undefined }))} />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Vagas</label>
-            <input className="input" value={unidadeDraft.vagas ?? ''}
-              onChange={e => setUnidadeDraft(u => ({ ...u, vagas: e.target.value ? Number(e.target.value) : undefined }))} />
-          </div>
+          <LabeledInput label="Área M² Comum">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_comum_m2 ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_comum_m2: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Área M² Aberta">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_aberta_m2 ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_aberta_m2: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Total M²">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.total_m2 ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, total_m2: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+
+          <LabeledInput label="Área Interna (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_interna_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_interna_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Área Externa (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_externa_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_externa_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Total (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.total_rs ?? ""}
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, total_rs: e.target.value ? Number(e.target.value) : undefined }))}
+            />
+          </LabeledInput>
+
+          <LabeledInput label="Entrada (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.entrada_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, entrada_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Reforço (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.reforco_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, reforco_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Parcelas (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.parcelas_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, parcelas_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+
+          <LabeledInput label="Entrega das Chaves (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.entrega_chaves_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, entrega_chaves_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
         </div>
 
-        <div className="mt-3">
+        <div className="mt-2">
           <div className="text-sm font-medium">Álbum da unidade</div>
           <input type="file" accept="image/*" onChange={onPickFotoUnidade} />
           {unidadeDraft.fotos.length > 0 && (
@@ -485,14 +644,36 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
         </div>
 
         <div className="flex gap-2">
-          <button className="btn-primary" onClick={addUnidade}>Adicionar unidade</button>
-          <button className="btn-ghost" onClick={() => setUnidadeDraft({
-            id: uid('uni'), titulo: '', area_priv_m2: undefined, area_comum_m2: undefined, quartos: undefined, suites: undefined, vagas: undefined, fotos: []
-          })}>Limpar</button>
+          <button className="px-4 py-2 bg-black text-white rounded-lg" onClick={addUnidade}>Adicionar unidade</button>
+          <button
+            className="px-4 py-2 border rounded-lg"
+            onClick={() =>
+              setUnidadeDraft({
+                id: uid("uni"),
+                titulo: "",
+                n_unidade: "",
+                area_privativa_m2: undefined,
+                area_comum_m2: undefined,
+                area_aberta_m2: undefined,
+                total_m2: undefined,
+                area_interna_rs: undefined,
+                area_externa_rs: undefined,
+                total_rs: undefined,
+                entrada_rs: undefined,
+                reforco_rs: undefined,
+                parcelas_rs: undefined,
+                entrega_chaves_rs: undefined,
+                fotos: [],
+              })
+            }
+          >
+            Limpar
+          </button>
         </div>
       </div>
 
-      <div className="rounded-xl border p-4">
+      {/* Tabela de unidades */}
+      <div className="bg-white rounded-2xl shadow p-6">
         <div className="text-lg font-semibold mb-3">Unidades cadastradas</div>
         {form.unidades.length === 0 ? (
           <div className="text-sm text-gray-500">Nenhuma unidade adicionada.</div>
@@ -502,31 +683,33 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
               <thead>
                 <tr className="text-left border-b">
                   <th className="py-2 pr-4">Título</th>
+                  <th className="py-2 pr-4">Nº</th>
                   <th className="py-2 pr-4">Priv.(m²)</th>
                   <th className="py-2 pr-4">Comum(m²)</th>
-                  <th className="py-2 pr-4">Quartos</th>
-                  <th className="py-2 pr-4">Suítes</th>
-                  <th className="py-2 pr-4">Vagas</th>
+                  <th className="py-2 pr-4">Aberta(m²)</th>
+                  <th className="py-2 pr-4">Total(m²)</th>
                   <th className="py-2 pr-4">Fotos</th>
                   <th className="py-2 pr-4"></th>
                 </tr>
               </thead>
               <tbody>
-                {form.unidades.map(u => (
+                {form.unidades.map((u) => (
                   <tr key={u.id} className="border-b">
                     <td className="py-2 pr-4">{u.titulo}</td>
-                    <td className="py-2 pr-4">{u.area_priv_m2 ?? '-'}</td>
-                    <td className="py-2 pr-4">{u.area_comum_m2 ?? '-'}</td>
-                    <td className="py-2 pr-4">{u.quartos ?? '-'}</td>
-                    <td className="py-2 pr-4">{u.suites ?? '-'}</td>
-                    <td className="py-2 pr-4">{u.vagas ?? '-'}</td>
+                    <td className="py-2 pr-4">{u.n_unidade ?? "-"}</td>
+                    <td className="py-2 pr-4">{u.area_privativa_m2 ?? "-"}</td>
+                    <td className="py-2 pr-4">{u.area_comum_m2 ?? "-"}</td>
+                    <td className="py-2 pr-4">{u.area_aberta_m2 ?? "-"}</td>
+                    <td className="py-2 pr-4">{u.total_m2 ?? "-"}</td>
                     <td className="py-2 pr-4">
-                      <button className="link" onClick={() => verFotos(u.fotos)}>
+                      <button className="text-blue-600" onClick={() => verFotos(u.fotos)}>
                         {u.fotos.length} foto(s)
                       </button>
                     </td>
                     <td className="py-2 pr-4">
-                      <button className="text-red-600" onClick={() => removeUnidade(u.id)}>Remover</button>
+                      <button className="text-red-600" onClick={() => removeUnidade(u.id)}>
+                        Remover
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -537,13 +720,16 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
       </div>
 
       <div className="flex gap-2">
-        <button className="btn-primary" onClick={salvar}>Salvar</button>
-        <button className="btn-ghost" onClick={()=> onCancel && onCancel()}>Cancelar</button>
+        <button className="px-4 py-2 bg-black text-white rounded-lg" onClick={salvar}>
+          Salvar
+        </button>
+        <button className="px-4 py-2 border rounded-lg" onClick={onCancel}>
+          Cancelar
+        </button>
       </div>
     </div>
   );
 }
-/* ===================== FIM do CadastrarView ===================== */
 
 // ----------------- Usuários (admin) -----------------
 const UsuariosAdminView: React.FC = () => {
@@ -693,7 +879,7 @@ export default function App() {
   const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
   const [empList, setEmpList] = useState<(Emp & { id: string })[]>([]);
   const [tab, setTab] = useState<Tab>("empreendimentos");
-  const [editingEmp, setEditingEmp] = useState<(Emp & { id: string }) | null>(null);
+  const [editingEmp, setEditingEmp] = useState<EmpreendimentoForm | null>(null);
 
   useEffect(() => {
     const unsub = listenAuth(async (u) => {
@@ -729,7 +915,21 @@ export default function App() {
               try { await deleteEmpreendimento(id); }
               catch (e: any) { alert(e?.message || "Erro ao excluir"); }
             }}
-            onEdit={(emp) => { setEditingEmp(emp); setTab("cadastrar"); }}
+            onEditRequest={(emp) => {
+              // Mapeia Emp -> EmpreendimentoForm para edição (traz também unidades/capa se existirem)
+              const f: EmpreendimentoForm = {
+                id: emp.id,
+                nome: emp.nome,
+                endereco: emp.endereco || "",
+                lat: (emp as any).lat,
+                lng: (emp as any).lng,
+                descricao: (emp as any).descricao,
+                capa: (emp as any).capa, // quando em modo teste
+                unidades: (emp as any).unidades || [],
+              };
+              setEditingEmp(f);
+              setTab("cadastrar");
+            }}
           />
         )}
 
@@ -737,13 +937,14 @@ export default function App() {
 
         {tab === "cadastrar" && userDoc?.role === "admin" && (
           <CadastrarView
-            editing={editingEmp as any}
+            editing={editingEmp}
             onSaved={() => { setEditingEmp(null); setTab("empreendimentos"); }}
             onCancel={() => { setEditingEmp(null); setTab("empreendimentos"); }}
           />
         )}
 
         {tab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
+
         {tab === "meu_usuario" && <Account />}
       </main>
     </div>
