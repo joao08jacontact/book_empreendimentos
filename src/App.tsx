@@ -1,12 +1,14 @@
-// src/App.tsx — MODO TESTE (sem Storage/ImgBB)
-// - Capa/fotos salvas como dataURL no Firestore
-// - Ficha técnica no cadastro
-// - Mapa robusto (evita NaN quando não há lat/lng)
+// src/App.tsx — Modo teste + Mapa real (React-Leaflet)
+// - Usa <MapaLeaflet /> (OpenStreetMap)
+// - Uploads simulados (dataURL) — sem Firebase Storage
+// - Ficha técnica completa no cadastro
 // - Tela Usuários com “Adicionar (Firestore)”
-// - <Account /> importado de ./components/Account
+// - <Account /> importado
+// -----------------------------------------------------
 
 import React, { useEffect, useMemo, useState } from "react";
 import Account from "./components/Account";
+import MapaLeaflet from "./components/MapaLeaflet";
 
 import {
   auth,
@@ -22,12 +24,6 @@ import {
   addEmpreendimento,
   deleteEmpreendimento,
 } from "./lib/firebase";
-
-import {
-  EmailAuthProvider,
-  reauthenticateWithCredential,
-  updatePassword,
-} from "firebase/auth";
 
 import {
   getFirestore,
@@ -240,78 +236,6 @@ const EmpreendimentosView: React.FC<{
           </div>
         </div>
       )}
-    </div>
-  );
-};
-
-// ----------------- Mapa (SVG) robusto -----------------
-const MapMock: React.FC<{ data: (Emp & { id: string })[] }> = ({ data }) => {
-  const valid = useMemo(
-    () => data.filter((e) => Number.isFinite(e.lat) && Number.isFinite(e.lng)) as (Emp & { id: string })[],
-    [data]
-  );
-
-  const coords = useMemo(() => {
-    if (valid.length === 0) return [] as { id: string; x: number; y: number; nome: string }[];
-
-    const lats = valid.map((e) => e.lat as number);
-    const lngs = valid.map((e) => e.lng as number);
-
-    const minLat = Math.min(...lats);
-    const maxLat = Math.max(...lats);
-    const minLng = Math.min(...lngs);
-    const maxLng = Math.max(...lngs);
-
-    const spanLat = maxLat - minLat || 1;
-    const spanLng = maxLng - minLng || 1;
-
-    const pad = 20;
-    const W = 1000;
-    const H = 500;
-
-    const project = (lat: number, lng: number) => {
-      const x = pad + ((lng - minLng) / spanLng) * (W - 2 * pad);
-      const y = pad + (1 - (lat - minLat) / spanLat) * (H - 2 * pad);
-      return { x, y };
-    };
-
-    return valid
-      .map((e) => {
-        const { x, y } = project(e.lat as number, e.lng as number);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-        return { id: e.id!, x, y, nome: e.nome };
-      })
-      .filter(Boolean) as { id: string; x: number; y: number; nome: string }[];
-  }, [valid]);
-
-  return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Mapa de Empreendimentos</h1>
-      <p className="text-gray-600">Preview simplificado (SVG). Depois trocamos por Leaflet.</p>
-      <div className="w-full bg-white rounded-xl shadow p-4">
-        <svg viewBox="0 0 1000 500" className="w-full h-[420px]">
-          <defs>
-            <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor="#eef2ff" />
-              <stop offset="100%" stopColor="#e0f2fe" />
-            </linearGradient>
-          </defs>
-          <rect x="0" y="0" width="1000" height="500" fill="url(#bg)" />
-          {coords.map((c) => (
-            <g key={c.id}>
-              <circle cx={c.x} cy={c.y} r={8} fill="#2563eb" opacity={0.9} />
-              <text x={c.x + 12} y={c.y + 4} className="text-xs" fill="#111827">
-                {c.nome}
-              </text>
-            </g>
-          ))}
-          {coords.length === 0 && (
-            <text x="20" y="40" className="text-sm" fill="#6b7280">
-              Nenhum empreendimento com latitude/longitude cadastrados.
-            </text>
-          )}
-        </svg>
-      </div>
     </div>
   );
 };
@@ -690,7 +614,7 @@ export default function App() {
   const [firebaseReady, setFirebaseReady] = useState(false);
   const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
   const [empList, setEmpList] = useState<(Emp & { id: string })[]>([]);
-  const [tab, setTab] = useState<Tab>("empreendimentos");
+  const [tab, setTab] = useState<"empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario">("empreendimentos");
 
   useEffect(() => {
     const unsub = listenAuth(async (u) => {
@@ -713,7 +637,7 @@ export default function App() {
   if (!firebaseReady) return null;
   if (!auth.currentUser) return <Login />;
 
-  const effectiveTab: Tab = tab;
+  const effectiveTab = tab;
 
   return (
     <div className="min-h-screen flex bg-gray-100">
@@ -731,7 +655,9 @@ export default function App() {
           />
         )}
 
-        {effectiveTab === "mapa" && <MapMock data={empList} />}
+        {effectiveTab === "mapa" && (
+          <MapaLeaflet empreendimentos={empList as any} />
+        )}
 
         {effectiveTab === "cadastrar" && userDoc?.role === "admin" && (
           <CadastrarView onSave={async (emp) => { await addEmpreendimento(emp); }} />
