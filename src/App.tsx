@@ -272,253 +272,313 @@ const NumberInput = ({
   </div>
 );
 
-// ----------------- Cadastrar -----------------
+/* ===================== CadastrarView (corrigido) =====================
+   Cole este componente no seu App.tsx no lugar do CadastrarView atual.
+   Dependências esperadas no arquivo: React, db (Firestore), firebase/firestore,
+   helper resizeImage (abaixo incluímos uma versão), uid (gerador simples).
+   Se você já possui resizeImage/uid no arquivo, mantenha as suas e remova as duplicadas.
+====================================================================== */
 
-const CadastrarView: React.FC<{
-  isAdmin: boolean;
-  editing?: (Emp & {id: string}) | null;
-  onSaved?: () => void;
-}> = ({ isAdmin, editing=null, onSaved }) => {
-  // --- dados do empreendimento ---
-  const [nome, setNome] = useState(editing?.nome || "");
-  const [endereco, setEndereco] = useState(editing?.endereco || "");
-  const [lat, setLat] = useState(editing?.lat?.toString() || "");
-  const [lng, setLng] = useState(editing?.lng?.toString() || "");
-  const [descricao, setDescricao] = useState(editing?.descricao || "");
-  const [capaDataURL, setCapaDataURL] = useState<string>(editing?.capaUrl || "");
-  const [loadingCapa, setLoadingCapa] = useState(false);
+type Unidade = {
+  id: string;
+  titulo: string;
+  area_priv_m2?: number;
+  area_comum_m2?: number;
+  quartos?: number;
+  suites?: number;
+  vagas?: number;
+  fotos: string[]; // DataURLs em modo teste
+};
 
-  // --- unidade (form atual) ---
-  const [unidade, setUnidade] = useState("");
-  const [nUnidade, setNUnidade] = useState("");
-  const [areaPriv, setAreaPriv] = useState("");
-  const [areaComum, setAreaComum] = useState("");
-  const [areaAberta, setAreaAberta] = useState("");
-  const [totalM2, setTotalM2] = useState("");
-  const [areaInt, setAreaInt] = useState("");
-  const [areaExt, setAreaExt] = useState("");
-  const [totalRs, setTotalRs] = useState("");
-  const [entrada, setEntrada] = useState("");
-  const [reforco, setReforco] = useState("");
-  const [parcelas, setParcelas] = useState("");
-  const [entrega, setEntrega] = useState("");
+type EmpreendimentoForm = {
+  id?: string;
+  nome: string;
+  endereco: string;
+  lat?: number;
+  lng?: number;
+  descricao?: string;
+  capa?: string;   // DataURL em modo teste
+  unidades: Unidade[];
+};
 
-  const [fotoLoading, setFotoLoading] = useState(false);
-  type Foto = { id: string; url: string; descricao?: string };
-  const [unitAlbum, setUnitAlbum] = useState<Foto[]>([]);
-  type Unidade = {
-    unidade: string; nUnidade: string; area_priv_m2: string; area_comum_m2: string; area_aberta_m2: string;
-    total_m2: string; area_interna_m2: string; area_externa_m2: string;
-    total_rs: string; entrada_rs: string; reforco_rs: string; parcelas_rs: string; entrega_chaves_rs: string;
-    fotos: Foto[];
+// Fallback helpers (remova se já existirem no arquivo)
+function uid(prefix='id'): string {
+  return `${prefix}_${Math.random().toString(36).slice(2,9)}`;
+}
+
+async function resizeImage(file: File, maxW=1280, maxH=1280): Promise<string> {
+  const img = document.createElement('img');
+  const url = URL.createObjectURL(file);
+  try {
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = rej;
+      img.src = url;
+    });
+    const { width, height } = img;
+    const ratio = Math.min(maxW/width, maxH/height, 1);
+    const w = Math.round(width * ratio);
+    const h = Math.round(height * ratio);
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas.toDataURL('image/jpeg', 0.9);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+interface CadastrarViewProps {
+  editing?: EmpreendimentoForm | null;
+  onSaved: () => void;
+  onCancel: () => void;
+}
+
+function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
+  const [form, setForm] = React.useState<EmpreendimentoForm>({
+    id: editing?.id,
+    nome: editing?.nome || '',
+    endereco: editing?.endereco || '',
+    lat: editing?.lat,
+    lng: editing?.lng,
+    descricao: editing?.descricao || '',
+    capa: editing?.capa,
+    unidades: editing?.unidades || []
+  });
+
+  const [unidadeDraft, setUnidadeDraft] = React.useState<Unidade>({
+    id: uid('uni'),
+    titulo: '',
+    area_priv_m2: undefined,
+    area_comum_m2: undefined,
+    quartos: undefined,
+    suites: undefined,
+    vagas: undefined,
+    fotos: []
+  });
+
+  // Eventos simples
+  const onChangeField = (k: keyof EmpreendimentoForm, v: any) =>
+    setForm(prev => ({ ...prev, [k]: v }));
+
+  const onPickCapa: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const dataUrl = await resizeImage(f);
+    onChangeField('capa', dataUrl);
   };
-  const [unidades, setUnidades] = useState<Unidade[]>(Array.isArray((editing as any)?.unidades) ? (editing as any).unidades : []);
+
+  const onPickFotoUnidade: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const dataUrl = await resizeImage(f, 1600, 1600);
+    setUnidadeDraft(u => ({ ...u, fotos: [...u.fotos, dataUrl] }));
+    // limpa input
+    e.currentTarget.value = '';
+  };
 
   const addUnidade = () => {
-    if (!unidade || !nUnidade) { alert("Informe ao menos 'Unidade' e 'Número'."); return; }
-    const nova: Unidade = {
-      unidade, nUnidade, area_priv_m2: areaPriv, area_comum_m2: areaComum,
-      area_aberta_m2: areaAberta, total_m2: totalM2, area_interna_m2: areaInt, area_externa_m2: areaExt,
-      total_rs: totalRs, entrada_rs: entrada, reforco_rs: reforco, parcelas_rs: parcelas, entrega_chaves_rs: entrega,
-      fotos: unitAlbum,
-    };
-    setUnidades((arr) => [...arr, nova]);
-    // limpa form da unidade
-    setUnidade(""); setNUnidade(""); setAreaPriv(""); setAreaComum(""); setAreaAberta(""); setTotalM2("");
-    setAreaInt(""); setAreaExt(""); setTotalRs(""); setEntrada(""); setReforco(""); setParcelas(""); setEntrega("");
-    setUnitAlbum([]);
+    if (!unidadeDraft.titulo.trim()) return;
+    setForm(prev => ({ ...prev, unidades: [...prev.unidades, unidadeDraft] }));
+    setUnidadeDraft({
+      id: uid('uni'),
+      titulo: '',
+      area_priv_m2: undefined,
+      area_comum_m2: undefined,
+      quartos: undefined,
+      suites: undefined,
+      vagas: undefined,
+      fotos: []
+    });
   };
 
-  const removeUnidade = (idx: number) => setUnidades((arr) => arr.filter((_,i) => i!==idx));
+  const removeUnidade = (id: string) => {
+    setForm(prev => ({ ...prev, unidades: prev.unidades.filter(u => u.id !== id) }));
+  };
 
-  const [saving, setSaving] = useState(false);
+  const verFotos = (fotos: string[]) => {
+    const html = fotos.map(f => `<img src="${f}" style="width:180px;height:180px;object-fit:cover;margin:6px;border-radius:10px;"/>`).join('');
+    const w = window.open('', '_blank', 'width=1000,height=700');
+    if (w) {
+      w.document.write(`<title>Fotos da unidade</title><div style="display:flex;flex-wrap:wrap;padding:16px;background:#f7f7f7">${html}</div>`);
+    }
+  };
+
+  // Firestore (modo teste: apenas salva DataURLs, sem Storage)
+  const salvar = async () => {
+    const payload = { ...form };
+    // Valida basico
+    if (!payload.nome.trim()) { alert('Informe o nome.'); return; }
+    // Grava
+    try {
+      const { collection, doc, setDoc, updateDoc } = await import('firebase/firestore');
+      const { db } = await import('./lib/firebase');
+      if (payload.id) {
+        const ref = doc(db, 'empreendimentos', payload.id);
+        await updateDoc(ref, payload as any);
+      } else {
+        const id = uid('emp');
+        const ref = doc(collection(db, 'empreendimentos'), id);
+        payload.id = id;
+        await setDoc(ref, payload as any);
+      }
+      alert('Empreendimento salvo.');
+      onSaved();
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao salvar.');
+    }
+  };
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">{editing ? "Editar Empreendimento" : "Cadastrar Empreendimento"}</h1>
-
-      {/* Bloco 1: dados do empreendimento */}
-      <div className="bg-white rounded-xl shadow p-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <TextInput label="Nome" value={nome} setValue={setNome} />
-          <TextInput label="Endereço" value={endereco} setValue={setEndereco} />
-          <TextInput label="Latitude" value={lat} setValue={setLat} />
-          <TextInput label="Longitude" value={lng} setValue={setLng} />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="text-sm font-medium">Nome</label>
+          <input className="input" value={form.nome}
+            onChange={e => onChangeField('nome', e.target.value)} />
         </div>
-        <div className="mt-4">
+        <div>
+          <label className="text-sm font-medium">Endereço</label>
+          <input className="input" value={form.endereco}
+            onChange={e => onChangeField('endereco', e.target.value)} />
+        </div>
+        <div>
+          <label className="text-sm font-medium">Latitude</label>
+          <input className="input" value={form.lat ?? ''}
+            onChange={e => onChangeField('lat', e.target.value ? Number(e.target.value) : undefined)} />
+        </div>
+        <div>
+          <label className="text-sm font-medium">Longitude</label>
+          <input className="input" value={form.lng ?? ''}
+            onChange={e => onChangeField('lng', e.target.value ? Number(e.target.value) : undefined)} />
+        </div>
+        <div className="md:col-span-2">
           <label className="text-sm font-medium">Descrição</label>
-          <textarea className="w-full border rounded px-3 py-2 mt-1" rows={4} value={descricao} onChange={(e)=>setDescricao(e.target.value)} />
+          <textarea className="input" rows={3} value={form.descricao}
+            onChange={e => onChangeField('descricao', e.target.value)} />
         </div>
       </div>
 
-      {/* Capa do empreendimento */}
-      <div className="bg-white rounded-xl shadow p-4">
-        <h2 className="font-medium mb-3">Capa</h2>
-        <div className="flex items-center gap-3">
-          <input type="file" accept="image/*" onChange={async (e) => {
-            const file = e.target.files?.[0];
-            if (!file) return; setLoadingCapa(true);
-            try {
-              const dataURL = await resizeImage(file, { quality: 0.85 });
-              setCapaDataURL(dataURL);
-            } finally { setLoadingCapa(false); }
-          }} />
-          {loadingCapa && <span className="text-sm text-gray-500">Compactando...</span>}
-        </div>
-        {capaDataURL && <img src={capaDataURL} className="mt-3 w-full max-w-md rounded-lg border" />}
-      </div>
-
-      {/* Bloco 2: Ficha técnica + álbum da unidade (form) */}
-      <div className="bg-white rounded-xl shadow p-4">
-        <h2 className="font-medium mb-3">Unidade (ficha técnica)</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <TextInput label="Unidade" value={unidade} setValue={setUnidade} />
-          <TextInput label="Nº da Unidade" value={nUnidade} setValue={setNUnidade} />
-          <NumberInput label="Área privativa (m²)" value={areaPriv} setValue={setAreaPriv} />
-          <NumberInput label="Área comum (m²)" value={areaComum} setValue={setAreaComum} />
-          <NumberInput label="Área aberta (m²)" value={areaAberta} setValue={setAreaAberta} />
-          <NumberInput label="Total (m²)" value={totalM2} setValue={setTotalM2} />
-          <NumberInput label="Área interna (m²)" value={areaInt} setValue={setAreaInt} />
-          <NumberInput label="Área externa (m²)" value={areaExt} setValue={setAreaExt} />
-          <NumberInput label="Total (R$)" value={totalRs} setValue={setTotalRs} />
-          <NumberInput label="Entrada (R$)" value={entrada} setValue={setEntrada} />
-          <NumberInput label="Reforço (R$)" value={reforco} setValue={setReforco} />
-          <NumberInput label="Parcelas (R$)" value={parcelas} setValue={setParcelas} />
-          <NumberInput label="Entrega das Chaves (R$)" value={entrega} setValue={setEntrega} />
-        </div>
-
-        {/* Álbum da unidade */}
-        <div className="mt-4">
-          <h3 className="font-medium mb-2">Álbum desta unidade</h3>
-          <div className="flex items-center gap-2">
-            <input id="fileFotoUni" type="file" accept="image/*" />
-            <input id="descUni" type="text" placeholder="Ex.: Sala" className="border rounded px-3 py-2 w-40" />
-            <button
-              onClick={async () => {
-                const fileEl = document.getElementById('fileFotoUni') as HTMLInputElement;
-                const descEl = document.getElementById('descUni') as HTMLInputElement;
-                const file = fileEl.files?.[0]; const desc = descEl.value.trim();
-                if (!file) return; setFotoLoading(true);
-                try {
-                  const url = await resizeImage(file, {quality:0.85});
-                  setUnitAlbum((arr)=>[...arr, {id: uid("fu"), url, descricao: desc}]);
-                  fileEl.value = ""; descEl.value = "";
-                } finally { setFotoLoading(false); }
-              }}
-              className="px-3 py-2 bg-blue-600 text-white rounded"
-            >Adicionar foto</button>
-            {fotoLoading && <span className="text-sm text-gray-500">Compactando...</span>}
+      <div className="rounded-xl border p-4">
+        <div className="text-lg font-semibold mb-2">Capa do empreendimento</div>
+        <input type="file" accept="image/*" onChange={onPickCapa} />
+        {form.capa && (
+          <div className="mt-3">
+            <img src={form.capa} className="w-full max-w-xl rounded-xl object-cover aspect-[16/9]" />
           </div>
-          {unitAlbum.length>0 && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-              {unitAlbum.map(f => (
-                <figure key={f.id} className="bg-white rounded-lg overflow-hidden shadow">
-                  <img src={f.url} className="w-full h-32 object-cover" />
-                  <figcaption className="text-xs p-2">{f.descricao || "Sem descrição"}</figcaption>
-                </figure>
+        )}
+      </div>
+
+      <div className="rounded-xl border p-4 space-y-3">
+        <div className="text-lg font-semibold">Unidade — Ficha técnica</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="text-sm font-medium">Título</label>
+            <input className="input" value={unidadeDraft.titulo}
+              onChange={e => setUnidadeDraft(u => ({ ...u, titulo: e.target.value }))} />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Área priv. (m²)</label>
+            <input className="input" value={unidadeDraft.area_priv_m2 ?? ''}
+              onChange={e => setUnidadeDraft(u => ({ ...u, area_priv_m2: e.target.value ? Number(e.target.value) : undefined }))} />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Área comum (m²)</label>
+            <input className="input" value={unidadeDraft.area_comum_m2 ?? ''}
+              onChange={e => setUnidadeDraft(u => ({ ...u, area_comum_m2: e.target.value ? Number(e.target.value) : undefined }))} />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Quartos</label>
+            <input className="input" value={unidadeDraft.quartos ?? ''}
+              onChange={e => setUnidadeDraft(u => ({ ...u, quartos: e.target.value ? Number(e.target.value) : undefined }))} />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Suítes</label>
+            <input className="input" value={unidadeDraft.suites ?? ''}
+              onChange={e => setUnidadeDraft(u => ({ ...u, suites: e.target.value ? Number(e.target.value) : undefined }))} />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Vagas</label>
+            <input className="input" value={unidadeDraft.vagas ?? ''}
+              onChange={e => setUnidadeDraft(u => ({ ...u, vagas: e.target.value ? Number(e.target.value) : undefined }))} />
+          </div>
+        </div>
+
+        <div className="mt-3">
+          <div className="text-sm font-medium">Álbum da unidade</div>
+          <input type="file" accept="image/*" onChange={onPickFotoUnidade} />
+          {unidadeDraft.fotos.length > 0 && (
+            <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
+              {unidadeDraft.fotos.map((f, i) => (
+                <img key={i} src={f} className="w-full aspect-square object-cover rounded-lg" />
               ))}
             </div>
           )}
         </div>
 
-        <button onClick={addUnidade} className="mt-4 px-3 py-2 bg-emerald-600 text-white rounded">Adicionar unidade</button>
+        <div className="flex gap-2">
+          <button className="btn-primary" onClick={addUnidade}>Adicionar unidade</button>
+          <button className="btn-ghost" onClick={() => setUnidadeDraft({
+            id: uid('uni'), titulo: '', area_priv_m2: undefined, area_comum_m2: undefined, quartos: undefined, suites: undefined, vagas: undefined, fotos: []
+          })}>Limpar</button>
+        </div>
       </div>
 
-      {/* Tabela de unidades */}
-      {unidades.length>0 && (
-        <div className="bg-white rounded-xl shadow p-4">
-          <h2 className="font-medium mb-3">Unidades cadastradas</h2>
-          <div className="overflow-auto">
+      <div className="rounded-xl border p-4">
+        <div className="text-lg font-semibold mb-3">Unidades cadastradas</div>
+        {form.unidades.length === 0 ? (
+          <div className="text-sm text-gray-500">Nenhuma unidade adicionada.</div>
+        ) : (
+          <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="text-left">
-                <tr>
-                  <th className="p-2">Unidade</th>
-                  <th className="p-2">Nº</th>
-                  <th className="p-2">Priv.(m²)</th>
-                  <th className="p-2">Comum(m²)</th>
-                  <th className="p-2">Aberta(m²)</th>
-                  <th className="p-2">Total(m²)</th>
-                  <th className="p-2">Interna</th>
-                  <th className="p-2">Externa</th>
-                  <th className="p-2">Valores (R$)</th>
-                  <th className="p-2">Fotos</th>
-                  <th className="p-2"></th>
+              <thead>
+                <tr className="text-left border-b">
+                  <th className="py-2 pr-4">Título</th>
+                  <th className="py-2 pr-4">Priv.(m²)</th>
+                  <th className="py-2 pr-4">Comum(m²)</th>
+                  <th className="py-2 pr-4">Quartos</th>
+                  <th className="py-2 pr-4">Suítes</th>
+                  <th className="py-2 pr-4">Vagas</th>
+                  <th className="py-2 pr-4">Fotos</th>
+                  <th className="py-2 pr-4"></th>
                 </tr>
               </thead>
               <tbody>
-                {unidades.map((u, idx)=>(
-                  <tr key={idx} className="border-t">
-                    <td className="p-2">{u.unidade}</td>
-                    <td className="p-2">{u.nUnidade}</td>
-                    <td className="p-2">{u.area_priv_m2}</td>
-                    <td className="p-2">{u.area_comum_m2}</td>
-                    <td className="p-2">{u.area_aberta_m2}</td>
-                    <td className="p-2">{u.total_m2}</td>
-                    <td className="p-2">{u.area_interna_m2}</td>
-                    <td className="p-2">{u.area_externa_m2}</td>
-                    <td className="p-2">
-                      {u.total_rs} / {u.entrada_rs} / {u.reforco_rs} / {u.parcelas_rs} / {u.entrega_chaves_rs}
+                {form.unidades.map(u => (
+                  <tr key={u.id} className="border-b">
+                    <td className="py-2 pr-4">{u.titulo}</td>
+                    <td className="py-2 pr-4">{u.area_priv_m2 ?? '-'}</td>
+                    <td className="py-2 pr-4">{u.area_comum_m2 ?? '-'}</td>
+                    <td className="py-2 pr-4">{u.quartos ?? '-'}</td>
+                    <td className="py-2 pr-4">{u.suites ?? '-'}</td>
+                    <td className="py-2 pr-4">{u.vagas ?? '-'}</td>
+                    <td className="py-2 pr-4">
+                      <button className="link" onClick={() => verFotos(u.fotos)}>
+                        {u.fotos.length} foto(s)
+                      </button>
                     </td>
-                    <td className="p-2">
-                      <button
-                        className="text-blue-600 underline"
-                        onClick={()=>{ 
-                          const html = `<div class='grid grid-cols-2 gap-6 p-2'>${u.fotos.map(f=>`<img src='${f.url}' style='width:160px;height:160px;object-fit:cover'/>`).join("")}</div>`;
-                          const w = window.open("", "_blank", "width=820,height=620,scrollbars=yes");
-                          if (w) { w.document.write(html); w.document.close(); }
-                        }}
-                      >ver fotos ({u.fotos.length})</button>
-                    </td>
-                    <td className="p-2">
-                      <button className="text-red-600" onClick={()=>removeUnidade(idx)}>remover</button>
+                    <td className="py-2 pr-4">
+                      <button className="text-red-600" onClick={() => removeUnidade(u.id)}>Remover</button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      <button
-        disabled={saving}
-        onClick={async () => {
-          if (!nome.trim()) { alert("Informe o nome."); return; }
-          setSaving(true);
-          try {
-            const db = getFirestore();
-            if ((editing as any)?.id) {
-              await updateDoc(docRef(db, "empreendimentos", (editing as any).id), {
-                nome, endereco, descricao,
-                lat: parseFloat(lat || "0") || 0,
-                lng: parseFloat(lng || "0") || 0,
-                capaUrl: capaDataURL || null,
-                unidades
-              });
-            } else {
-              const newId = uid("emp");
-              await setDoc(docRef(db, "empreendimentos", newId), {
-                nome, endereco, descricao,
-                lat: parseFloat(lat || "0") || 0,
-                lng: parseFloat(lng || "0") || 0,
-                capaUrl: capaDataURL || null,
-                dataCriacao: Date.now(),
-                unidades
-              });
-            }
-            alert("Dados salvos!");
-            onSaved and onSaved();
-          } finally {
-            setSaving(false);
-          }
-        }}
-        className="mt-6 px-4 py-2 bg-blue-600 text-white rounded"
-      >
-        {saving ? "Salvando..." : ((editing as any)?.id ? "Salvar alterações" : "Salvar Empreendimento")}
-      </button>
+      <div className="flex gap-2">
+        <button className="btn-primary" onClick={salvar}>Salvar</button>
+        <button className="btn-ghost" onClick={onCancel}>Cancelar</button>
+      </div>
     </div>
   );
-};
+}
+/* ===================== FIM do CadastrarView (corrigido) ===================== */
+
 // ----------------- Usuários (admin) -----------------
 const UsuariosAdminView: React.FC = () => {
   const db = getFirestore();
