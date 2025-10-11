@@ -1,12 +1,12 @@
-// src/App.tsx — Modo teste + Mapa real (React-Leaflet)
-// - Usa <MapaLeaflet /> (OpenStreetMap)
-// - Uploads simulados (dataURL) — sem Firebase Storage
-// - Ficha técnica completa no cadastro
-// - Tela Usuários com “Adicionar (Firestore)”
-// - <Account /> importado
+// src/App.tsx — Modo teste + Mapa real (React-Leaflet) — BUILD-FIX
+// Mantém sua estrutura e corrige:
+// - funções duplicadas
+// - onEdit ausente nas props
+// - uso de 'role' solto
+// - tipo de 'editing' no CadastrarView
 // -----------------------------------------------------
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Account from "./components/Account";
 import MapaLeaflet from "./components/MapaLeaflet";
 
@@ -34,9 +34,11 @@ import {
   doc as docRef,
   updateDoc,
   addDoc,
+  setDoc,
+  doc,
 } from "firebase/firestore";
 
-// ----------------- utils -----------------
+// ----------------- utils (definidos UMA vez) -----------------
 function uid(prefix = "id"): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -62,7 +64,7 @@ async function resizeImage(
   const dataURL = await fileToDataURL(file);
   const img = document.createElement("img");
   img.src = dataURL;
-  await new Promise((res) => (img.onload = () => res(null)));
+  await new Promise<void>((res) => (img.onload = () => res()));
 
   const canvas = document.createElement("canvas");
   const ratio = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
@@ -274,8 +276,7 @@ const NumberInput = ({
 );
 
 /* ===================== CadastrarView (corrigido) =====================
-   Cole este componente no seu App.tsx no lugar do CadastrarView atual.
-   (Usa os helpers uid/resizeImage já definidos acima — sem duplicar.)
+   Usa os helpers uid/resizeImage acima (não duplica).
 ====================================================================== */
 
 type UnidadeForm = {
@@ -344,9 +345,8 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
   const onPickFotoUnidade: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    const dataUrl = await resizeImage(f, 1600, 1600);
+    const dataUrl = await resizeImage(f, { maxWidth: 1600, maxHeight: 1600 });
     setUnidadeDraft(u => ({ ...u, fotos: [...u.fotos, dataUrl] }));
-    // limpa input
     e.currentTarget.value = '';
   };
 
@@ -380,20 +380,14 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
   // Firestore (modo teste: apenas salva DataURLs, sem Storage)
   const salvar = async () => {
     const payload = { ...form };
-    // Valida basico
     if (!payload.nome.trim()) { alert('Informe o nome.'); return; }
-    // Grava
     try {
-      const { collection, doc, setDoc, updateDoc } = await import('firebase/firestore');
-      const { db } = await import('./lib/firebase');
       if (payload.id) {
-        const ref = doc(db, 'empreendimentos', payload.id);
-        await updateDoc(ref, payload as any);
+        await updateDoc(docRef(getFirestore(), 'empreendimentos', payload.id), payload as any);
       } else {
         const id = uid('emp');
-        const ref = doc(collection(db, 'empreendimentos'), id);
         payload.id = id;
-        await setDoc(ref, payload as any);
+        await setDoc(doc(getFirestore(), 'empreendimentos', id), payload as any);
       }
       alert('Empreendimento salvo.');
       onSaved();
@@ -549,7 +543,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     </div>
   );
 }
-/* ===================== FIM do CadastrarView (corrigido) ===================== */
+/* ===================== FIM do CadastrarView ===================== */
 
 // ----------------- Usuários (admin) -----------------
 const UsuariosAdminView: React.FC = () => {
@@ -698,7 +692,7 @@ export default function App() {
   const [firebaseReady, setFirebaseReady] = useState(false);
   const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
   const [empList, setEmpList] = useState<(Emp & { id: string })[]>([]);
-  const [tab, setTab] = useState<"empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario">("empreendimentos");
+  const [tab, setTab] = useState<Tab>("empreendimentos");
   const [editingEmp, setEditingEmp] = useState<(Emp & { id: string }) | null>(null);
 
   useEffect(() => {
@@ -722,14 +716,12 @@ export default function App() {
   if (!firebaseReady) return null;
   if (!auth.currentUser) return <Login />;
 
-  const effectiveTab = tab;
-
   return (
     <div className="min-h-screen flex bg-gray-100">
-      <Sidebar tab={effectiveTab} setTab={setTab} onLogout={() => logout()} userDoc={userDoc!} />
+      <Sidebar tab={tab} setTab={setTab} onLogout={() => logout()} userDoc={userDoc!} />
 
       <main className="flex-1 p-6">
-        {effectiveTab === "empreendimentos" && (
+        {tab === "empreendimentos" && (
           <EmpreendimentosView
             data={empList}
             isAdmin={userDoc?.role === "admin"}
@@ -741,11 +733,9 @@ export default function App() {
           />
         )}
 
-        {effectiveTab === "mapa" && (
-          <MapaLeaflet empreendimentos={empList as any} />
-        )}
+        {tab === "mapa" && <MapaLeaflet empreendimentos={empList as any} />}
 
-        {effectiveTab === "cadastrar" && userDoc?.role === "admin" && (
+        {tab === "cadastrar" && userDoc?.role === "admin" && (
           <CadastrarView
             editing={editingEmp as any}
             onSaved={() => { setEditingEmp(null); setTab("empreendimentos"); }}
@@ -753,9 +743,8 @@ export default function App() {
           />
         )}
 
-        {effectiveTab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
-
-        {effectiveTab === "meu_usuario" && <Account />}
+        {tab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
+        {tab === "meu_usuario" && <Account />}
       </main>
     </div>
   );
