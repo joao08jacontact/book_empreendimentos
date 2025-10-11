@@ -187,12 +187,20 @@ const EmpreendimentosView: React.FC<{
                   Abrir álbum
                 </button>
                 {isAdmin && (
-                  <button
-                    onClick={() => { if (confirm("Excluir este empreendimento?")) onDelete(e.id!); }}
-                    className="text-red-600 text-sm"
-                  >
-                    Excluir
-                  </button>
+                  <>
+                    <button
+                      onClick={() => onEdit(e as any)}
+                      className="text-emerald-700 text-sm mr-3"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      onClick={() => { if (confirm("Excluir este empreendimento?")) onDelete(e.id!); }}
+                      className="text-red-600 text-sm"
+                    >
+                      Excluir
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -265,13 +273,22 @@ const NumberInput = ({
 );
 
 // ----------------- Cadastrar -----------------
-const CadastrarView: React.FC<{ onSave: (emp: Emp) => Promise<void> }> = ({ onSave }) => {
-  const [nome, setNome] = useState("");
-  const [endereco, setEndereco] = useState("");
-  const [lat, setLat] = useState("");
-  const [lng, setLng] = useState("");
-  const [descricao, setDescricao] = useState("");
 
+const CadastrarView: React.FC<{
+  isAdmin: boolean;
+  editing?: (Emp & {id: string}) | null;
+  onSaved?: () => void;
+}> = ({ isAdmin, editing=null, onSaved }) => {
+  // --- dados do empreendimento ---
+  const [nome, setNome] = useState(editing?.nome || "");
+  const [endereco, setEndereco] = useState(editing?.endereco || "");
+  const [lat, setLat] = useState(editing?.lat?.toString() || "");
+  const [lng, setLng] = useState(editing?.lng?.toString() || "");
+  const [descricao, setDescricao] = useState(editing?.descricao || "");
+  const [capaDataURL, setCapaDataURL] = useState<string>(editing?.capaUrl || "");
+  const [loadingCapa, setLoadingCapa] = useState(false);
+
+  // --- unidade (form atual) ---
   const [unidade, setUnidade] = useState("");
   const [nUnidade, setNUnidade] = useState("");
   const [areaPriv, setAreaPriv] = useState("");
@@ -286,187 +303,222 @@ const CadastrarView: React.FC<{ onSave: (emp: Emp) => Promise<void> }> = ({ onSa
   const [parcelas, setParcelas] = useState("");
   const [entrega, setEntrega] = useState("");
 
-  const [capaDataURL, setCapaDataURL] = useState<string>("");
-  const [loadingCapa, setLoadingCapa] = useState(false);
-  const [album, setAlbum] = useState<Foto[]>([]);
   const [fotoLoading, setFotoLoading] = useState(false);
+  type Foto = { id: string; url: string; descricao?: string };
+  const [unitAlbum, setUnitAlbum] = useState<Foto[]>([]);
+  type Unidade = {
+    unidade: string; nUnidade: string; area_priv_m2: string; area_comum_m2: string; area_aberta_m2: string;
+    total_m2: string; area_interna_m2: string; area_externa_m2: string;
+    total_rs: string; entrada_rs: string; reforco_rs: string; parcelas_rs: string; entrega_chaves_rs: string;
+    fotos: Foto[];
+  };
+  const [unidades, setUnidades] = useState<Unidade[]>(Array.isArray((editing as any)?.unidades) ? (editing as any).unidades : []);
+
+  const addUnidade = () => {
+    if (!unidade || !nUnidade) { alert("Informe ao menos 'Unidade' e 'Número'."); return; }
+    const nova: Unidade = {
+      unidade, nUnidade, area_priv_m2: areaPriv, area_comum_m2: areaComum,
+      area_aberta_m2: areaAberta, total_m2: totalM2, area_interna_m2: areaInt, area_externa_m2: areaExt,
+      total_rs: totalRs, entrada_rs: entrada, reforco_rs: reforco, parcelas_rs: parcelas, entrega_chaves_rs: entrega,
+      fotos: unitAlbum,
+    };
+    setUnidades((arr) => [...arr, nova]);
+    // limpa form da unidade
+    setUnidade(""); setNUnidade(""); setAreaPriv(""); setAreaComum(""); setAreaAberta(""); setTotalM2("");
+    setAreaInt(""); setAreaExt(""); setTotalRs(""); setEntrada(""); setReforco(""); setParcelas(""); setEntrega("");
+    setUnitAlbum([]);
+  };
+
+  const removeUnidade = (idx: number) => setUnidades((arr) => arr.filter((_,i) => i!==idx));
+
   const [saving, setSaving] = useState(false);
 
   return (
-    <div className="max-w-5xl">
-      <h1 className="text-2xl font-semibold mb-4">Cadastrar Empreendimento</h1>
+    <div className="space-y-6">
+      <h1 className="text-2xl font-semibold">{editing ? "Editar Empreendimento" : "Cadastrar Empreendimento"}</h1>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <div>
-          <label className="text-sm block mb-1">Nome</label>
-          <input value={nome} onChange={(e) => setNome(e.target.value)} className="w-full border p-2 rounded" />
+      {/* Bloco 1: dados do empreendimento */}
+      <div className="bg-white rounded-xl shadow p-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <TextInput label="Nome" value={nome} setValue={setNome} />
+          <TextInput label="Endereço" value={endereco} setValue={setEndereco} />
+          <TextInput label="Latitude" value={lat} setValue={setLat} />
+          <TextInput label="Longitude" value={lng} setValue={setLng} />
         </div>
-        <div>
-          <label className="text-sm block mb-1">Endereço</label>
-          <input value={endereco} onChange={(e) => setEndereco(e.target.value)} className="w-full border p-2 rounded" />
-        </div>
-        <div>
-          <label className="text-sm block mb-1">Latitude</label>
-          <input value={lat} onChange={(e) => setLat(e.target.value)} className="w-full border p-2 rounded" />
-        </div>
-        <div>
-          <label className="text-sm block mb-1">Longitude</label>
-          <input value={lng} onChange={(e) => setLng(e.target.value)} className="w-full border p-2 rounded" />
-        </div>
-        <div className="md:col-span-2">
-          <label className="text-sm block mb-1">Descrição</label>
-          <textarea value={descricao} onChange={(e) => setDescricao(e.target.value)} className="w-full border p-2 rounded" />
+        <div className="mt-4">
+          <label className="text-sm font-medium">Descrição</label>
+          <textarea className="w-full border rounded px-3 py-2 mt-1" rows={4} value={descricao} onChange={(e)=>setDescricao(e.target.value)} />
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow p-4 mt-6">
-        <h2 className="font-medium mb-3">Ficha técnica</h2>
-        <div className="grid gap-3 md:grid-cols-3">
-          <div>
-            <label className="text-sm block mb-1">Unidade</label>
-            <input value={unidade} onChange={(e) => setUnidade(e.target.value)} className="w-full border p-2 rounded" />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Nº Unidade</label>
-            <input value={nUnidade} onChange={(e) => setNUnidade(e.target.value)} className="w-full border p-2 rounded" />
-          </div>
-          <NumberInput label="Área M² Privativa" value={areaPriv} setValue={setAreaPriv} />
-          <NumberInput label="Área M² Comum" value={areaComum} setValue={setAreaComum} />
-          <NumberInput label="Área M² Aberta" value={areaAberta} setValue={setAreaAberta} />
-          <NumberInput label="Total M²" value={totalM2} setValue={setTotalM2} />
-          <NumberInput label="Área Interna (R$)" value={areaInt} setValue={setAreaInt} step={1} />
-          <NumberInput label="Área Externa (R$)" value={areaExt} setValue={setAreaExt} step={1} />
-          <NumberInput label="Total (R$)" value={totalRs} setValue={setTotalRs} step={1} />
-          <NumberInput label="Entrada (R$)" value={entrada} setValue={setEntrada} step={1} />
-          <NumberInput label="Reforço (R$)" value={reforco} setValue={setReforco} step={1} />
-          <NumberInput label="Parcelas (R$)" value={parcelas} setValue={setParcelas} step={1} />
-          <NumberInput label="Entrega das Chaves (R$)" value={entrega} setValue={setEntrega} step={1} />
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow p-4 mt-6">
+      {/* Capa do empreendimento */}
+      <div className="bg-white rounded-xl shadow p-4">
         <h2 className="font-medium mb-3">Capa</h2>
         <div className="flex items-center gap-3">
-          <input
-            type="file"
-            accept="image/*"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              setLoadingCapa(true);
-              try {
-                const dataURL = await resizeImage(file);
-                setCapaDataURL(dataURL);
-              } finally {
-                setLoadingCapa(false);
-              }
-            }}
-          />
+          <input type="file" accept="image/*" onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return; setLoadingCapa(true);
+            try {
+              const dataURL = await resizeImage(file, { quality: 0.85 });
+              setCapaDataURL(dataURL);
+            } finally { setLoadingCapa(false); }
+          }} />
           {loadingCapa && <span className="text-sm text-gray-500">Compactando...</span>}
         </div>
-        {capaDataURL && (
-          <div className="mt-2">
-            <img src={capaDataURL} className="w-full max-w-sm rounded-lg shadow" />
-          </div>
-        )}
+        {capaDataURL && <img src={capaDataURL} className="mt-3 w-full max-w-md rounded-lg border" />}
       </div>
 
-      <div className="bg-white rounded-xl shadow p-4 mt-6">
-        <h2 className="font-medium mb-3">Álbum de fotos</h2>
-        <div className="flex items-center gap-2 flex-wrap">
-          <input id="desc" placeholder="Ex.: Sala" className="border p-2 rounded text-sm w-40" />
-          <input id="fileFoto" type="file" accept="image/*" className="border p-2 rounded text-sm" />
-          <button
-            className="px-3 py-2 bg-blue-600 text-white text-sm rounded"
-            onClick={async () => {
-              const desc = (document.getElementById("desc") as HTMLInputElement).value.trim();
-              const file = (document.getElementById("fileFoto") as HTMLInputElement).files?.[0];
-              if (!file) return;
-              setFotoLoading(true);
-              try {
-                const dataURL = await resizeImage(file, { quality: 0.85 });
-                setAlbum((arr) => [...arr, { id: uid("f"), url: dataURL, descricao: desc }]);
-                (document.getElementById("desc") as HTMLInputElement).value = "";
-                (document.getElementById("fileFoto") as HTMLInputElement).value = "";
-              } finally {
-                setFotoLoading(false);
-              }
-            }}
-          >
-            Adicionar foto
-          </button>
-          {fotoLoading && <span className="text-sm text-gray-500">Compactando...</span>}
+      {/* Bloco 2: Ficha técnica + álbum da unidade (form) */}
+      <div className="bg-white rounded-xl shadow p-4">
+        <h2 className="font-medium mb-3">Unidade (ficha técnica)</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <TextInput label="Unidade" value={unidade} setValue={setUnidade} />
+          <TextInput label="Nº da Unidade" value={nUnidade} setValue={setNUnidade} />
+          <NumberInput label="Área privativa (m²)" value={areaPriv} setValue={setAreaPriv} />
+          <NumberInput label="Área comum (m²)" value={areaComum} setValue={setAreaComum} />
+          <NumberInput label="Área aberta (m²)" value={areaAberta} setValue={setAreaAberta} />
+          <NumberInput label="Total (m²)" value={totalM2} setValue={setTotalM2} />
+          <NumberInput label="Área interna (m²)" value={areaInt} setValue={setAreaInt} />
+          <NumberInput label="Área externa (m²)" value={areaExt} setValue={setAreaExt} />
+          <NumberInput label="Total (R$)" value={totalRs} setValue={setTotalRs} />
+          <NumberInput label="Entrada (R$)" value={entrada} setValue={setEntrada} />
+          <NumberInput label="Reforço (R$)" value={reforco} setValue={setReforco} />
+          <NumberInput label="Parcelas (R$)" value={parcelas} setValue={setParcelas} />
+          <NumberInput label="Entrega das Chaves (R$)" value={entrega} setValue={setEntrega} />
         </div>
 
-        {album.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-            {album.map((f) => (
-              <figure key={f.id} className="bg-white rounded-lg overflow-hidden shadow">
-                <img src={f.url} className="w-full h-32 object-cover" />
-                <figcaption className="text-xs p-2">{f.descricao || "Sem descrição"}</figcaption>
-              </figure>
-            ))}
+        {/* Álbum da unidade */}
+        <div className="mt-4">
+          <h3 className="font-medium mb-2">Álbum desta unidade</h3>
+          <div className="flex items-center gap-2">
+            <input id="fileFotoUni" type="file" accept="image/*" />
+            <input id="descUni" type="text" placeholder="Ex.: Sala" className="border rounded px-3 py-2 w-40" />
+            <button
+              onClick={async () => {
+                const fileEl = document.getElementById('fileFotoUni') as HTMLInputElement;
+                const descEl = document.getElementById('descUni') as HTMLInputElement;
+                const file = fileEl.files?.[0]; const desc = descEl.value.trim();
+                if (!file) return; setFotoLoading(true);
+                try {
+                  const url = await resizeImage(file, {quality:0.85});
+                  setUnitAlbum((arr)=>[...arr, {id: uid("fu"), url, descricao: desc}]);
+                  fileEl.value = ""; descEl.value = "";
+                } finally { setFotoLoading(false); }
+              }}
+              className="px-3 py-2 bg-blue-600 text-white rounded"
+            >Adicionar foto</button>
+            {fotoLoading && <span className="text-sm text-gray-500">Compactando...</span>}
           </div>
-        )}
+          {unitAlbum.length>0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+              {unitAlbum.map(f => (
+                <figure key={f.id} className="bg-white rounded-lg overflow-hidden shadow">
+                  <img src={f.url} className="w-full h-32 object-cover" />
+                  <figcaption className="text-xs p-2">{f.descricao || "Sem descrição"}</figcaption>
+                </figure>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <button onClick={addUnidade} className="mt-4 px-3 py-2 bg-emerald-600 text-white rounded">Adicionar unidade</button>
       </div>
+
+      {/* Tabela de unidades */}
+      {unidades.length>0 && (
+        <div className="bg-white rounded-xl shadow p-4">
+          <h2 className="font-medium mb-3">Unidades cadastradas</h2>
+          <div className="overflow-auto">
+            <table className="min-w-full text-sm">
+              <thead className="text-left">
+                <tr>
+                  <th className="p-2">Unidade</th>
+                  <th className="p-2">Nº</th>
+                  <th className="p-2">Priv.(m²)</th>
+                  <th className="p-2">Comum(m²)</th>
+                  <th className="p-2">Aberta(m²)</th>
+                  <th className="p-2">Total(m²)</th>
+                  <th className="p-2">Interna</th>
+                  <th className="p-2">Externa</th>
+                  <th className="p-2">Valores (R$)</th>
+                  <th className="p-2">Fotos</th>
+                  <th className="p-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {unidades.map((u, idx)=>(
+                  <tr key={idx} className="border-t">
+                    <td className="p-2">{u.unidade}</td>
+                    <td className="p-2">{u.nUnidade}</td>
+                    <td className="p-2">{u.area_priv_m2}</td>
+                    <td className="p-2">{u.area_comum_m2}</td>
+                    <td className="p-2">{u.area_aberta_m2}</td>
+                    <td className="p-2">{u.total_m2}</td>
+                    <td className="p-2">{u.area_interna_m2}</td>
+                    <td className="p-2">{u.area_externa_m2}</td>
+                    <td className="p-2">
+                      {u.total_rs} / {u.entrada_rs} / {u.reforco_rs} / {u.parcelas_rs} / {u.entrega_chaves_rs}
+                    </td>
+                    <td className="p-2">
+                      <button
+                        className="text-blue-600 underline"
+                        onClick={()=>{ 
+                          const html = `<div class='grid grid-cols-2 gap-6 p-2'>${u.fotos.map(f=>`<img src='${f.url}' style='width:160px;height:160px;object-fit:cover'/>`).join("")}</div>`;
+                          const w = window.open("", "_blank", "width=820,height=620,scrollbars=yes");
+                          if (w) { w.document.write(html); w.document.close(); }
+                        }}
+                      >ver fotos ({u.fotos.length})</button>
+                    </td>
+                    <td className="p-2">
+                      <button className="text-red-600" onClick={()=>removeUnidade(idx)}>remover</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <button
         disabled={saving}
         onClick={async () => {
-          if (!nome) return;
+          if (!nome.trim()) { alert("Informe o nome."); return; }
           setSaving(true);
           try {
-            const emp: Emp = {
-              nome,
-              endereco,
-              lat: lat ? Number(lat) : undefined,
-              lng: lng ? Number(lng) : undefined,
-              descricao,
-              unidade,
-              n_unidade: nUnidade,
-              area_privativa_m2: areaPriv ? Number(areaPriv) : undefined,
-              area_comum_m2: areaComum ? Number(areaComum) : undefined,
-              area_aberta_m2: areaAberta ? Number(areaAberta) : undefined,
-              total_m2: totalM2 ? Number(totalM2) : undefined,
-              area_interna_rs: areaInt ? Number(areaInt) : undefined,
-              area_externa_rs: areaExt ? Number(areaExt) : undefined,
-              total_rs: totalRs ? Number(totalRs) : undefined,
-              entrada_rs: entrada ? Number(entrada) : undefined,
-              reforco_rs: reforco ? Number(reforco) : undefined,
-              parcelas_rs: parcelas ? Number(parcelas) : undefined,
-              entrega_chaves_rs: entrega ? Number(entrega) : undefined,
-              fotos: [],
-            };
-
-            const newId = await addEmpreendimento(emp);
-
-            const capaUrl = capaDataURL || "/assets/mock.jpg";
-            const fotosSubidas: Foto[] = album;
-
-            await updateDoc(docRef(getFirestore(), "empreendimentos", newId), {
-              capaUrl: capaUrl || null,
-              fotos: fotosSubidas,
-            });
-
-            setNome(""); setEndereco(""); setLat(""); setLng(""); setDescricao("");
-            setUnidade(""); setNUnidade(""); setAreaPriv(""); setAreaComum("");
-            setAreaAberta(""); setTotalM2(""); setAreaInt(""); setAreaExt("");
-            setTotalRs(""); setEntrada(""); setReforco(""); setParcelas(""); setEntrega("");
-            setCapaDataURL(""); setAlbum([]);
-
-            alert("Empreendimento salvo!");
+            const db = getFirestore();
+            if ((editing as any)?.id) {
+              await updateDoc(docRef(db, "empreendimentos", (editing as any).id), {
+                nome, endereco, descricao,
+                lat: parseFloat(lat || "0") || 0,
+                lng: parseFloat(lng || "0") || 0,
+                capaUrl: capaDataURL || null,
+                unidades
+              });
+            } else {
+              const newId = uid("emp");
+              await setDoc(docRef(db, "empreendimentos", newId), {
+                nome, endereco, descricao,
+                lat: parseFloat(lat || "0") || 0,
+                lng: parseFloat(lng || "0") || 0,
+                capaUrl: capaDataURL || null,
+                dataCriacao: Date.now(),
+                unidades
+              });
+            }
+            alert("Dados salvos!");
+            onSaved and onSaved();
           } finally {
             setSaving(false);
           }
         }}
         className="mt-6 px-4 py-2 bg-blue-600 text-white rounded"
       >
-        {saving ? "Salvando..." : "Salvar Empreendimento"}
+        {saving ? "Salvando..." : ((editing as any)?.id ? "Salvar alterações" : "Salvar Empreendimento")}
       </button>
     </div>
   );
 };
-
 // ----------------- Usuários (admin) -----------------
 const UsuariosAdminView: React.FC = () => {
   const db = getFirestore();
@@ -615,6 +667,7 @@ export default function App() {
   const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
   const [empList, setEmpList] = useState<(Emp & { id: string })[]>([]);
   const [tab, setTab] = useState<"empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario">("empreendimentos");
+  const [editingEmp, setEditingEmp] = useState<(Emp & { id: string }) | null>(null);
 
   useEffect(() => {
     const unsub = listenAuth(async (u) => {
@@ -660,7 +713,7 @@ export default function App() {
         )}
 
         {effectiveTab === "cadastrar" && userDoc?.role === "admin" && (
-          <CadastrarView onSave={async (emp) => { await addEmpreendimento(emp); }} />
+          <CadastrarView isAdmin={role==="admin"} editing={editingEmp} onSaved={()=>{ setEditingEmp(null); setTab("empreendimentos"); }} />
         )}
 
         {effectiveTab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
