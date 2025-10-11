@@ -16,9 +16,10 @@ import {
   listenEmpreendimentos,
   addEmpreendimento,
   deleteEmpreendimento,
-  uploadCapaFromDataURL,
-  uploadFotoFromDataURL,
 } from "./lib/firebase";
+// 👇 Helpers de upload agora vêm do ImgBB
+import { uploadCapaFromDataURL, uploadFotoFromDataURL } from "./lib/uploadToImgbb";
+
 import {
   EmailAuthProvider,
   reauthenticateWithCredential,
@@ -524,13 +525,13 @@ const CadastrarView: React.FC<{
             };
             const newId = await addEmpreendimento(tempEmp);
 
-            // 2) envia capa
+            // 2) envia capa -> ImgBB
             let capaUrl: string | undefined = undefined;
             if (capaDataURL) {
               capaUrl = await uploadCapaFromDataURL(newId, capaDataURL);
             }
 
-            // 3) envia álbum, obtém URLs
+            // 3) envia álbum -> ImgBB
             const fotosSubidas: Foto[] = [];
             for (const f of album) {
               const url = await uploadFotoFromDataURL(newId, f.id, f.url);
@@ -538,19 +539,11 @@ const CadastrarView: React.FC<{
             }
 
             // 4) atualiza doc com capa e fotos
-            await ensureUserDoc(newId, {} as any); // no-op
-            await fetch(`/__/updateEmp?id=${newId}`, { method: "HEAD" }).catch(() => {});
-            await (await import("firebase/firestore")).updateDoc(
-              (await import("firebase/firestore")).doc(
-                (await import("firebase/firestore")).getFirestore(),
-                "empreendimentos",
-                newId
-              ),
-              {
-                capaUrl: capaUrl || null,
-                fotos: fotosSubidas,
-              }
-            );
+            const { getFirestore, doc, updateDoc } = await import("firebase/firestore");
+            await updateDoc(doc(getFirestore(), "empreendimentos", newId), {
+              capaUrl: capaUrl || null,
+              fotos: fotosSubidas,
+            });
 
             // reset
             setNome("");
@@ -657,24 +650,16 @@ const Account: React.FC = () => {
     e.preventDefault();
     setMsg(null);
 
-    if (newPwd !== confirmPwd) {
-      setMsg("Confirmação diferente da nova senha.");
-      return;
-    }
+    if (newPwd !== confirmPwd) setMsg("Confirmação diferente da nova senha.");
 
     try {
       setLoading(true);
       const user = auth.currentUser;
       if (!user || !user.email) throw new Error("Usuário não logado.");
 
-      // Reautenticar com a SENHA ATUAL
       const cred = EmailAuthProvider.credential(user.email, currentPwd);
       await reauthenticateWithCredential(user, cred);
-
-      // Atualizar senha
       await updatePassword(user, newPwd);
-
-      // limpar flag 'mustChangePassword' se existir
       await markMustChange(user.uid, false).catch(() => {});
 
       setMsg("Senha atualizada com sucesso.");
