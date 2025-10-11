@@ -1,559 +1,672 @@
+// src/App.tsx — Modo teste + Mapa real (React-Leaflet)
+// - Usa <MapaLeaflet /> (OpenStreetMap)
+// - Uploads simulados (dataURL) — sem Firebase Storage
+// - Ficha técnica completa no cadastro
+// - Tela Usuários com “Adicionar (Firestore)”
+// - <Account /> importado
+// -----------------------------------------------------
+
 import React, { useEffect, useMemo, useState } from "react";
+import Account from "./components/Account";
+import MapaLeaflet from "./components/MapaLeaflet";
+
 import {
+  auth,
+  login,
+  logout,
+  listenAuth,
+  getUserDoc,
+  ensureUserDoc,
+  AppUserDoc,
+  Emp,
+  Foto,
+  listenEmpreendimentos,
+  addEmpreendimento,
+  deleteEmpreendimento,
+} from "./lib/firebase";
+
+import {
+  getFirestore,
   collection,
   onSnapshot,
-  addDoc,
-  doc,
-  updateDoc,
-  deleteDoc,
-  serverTimestamp,
-  query,
   orderBy,
-  CollectionReference,
+  query,
+  doc as docRef,
+  updateDoc,
+  addDoc,
 } from "firebase/firestore";
-import { db } from "./lib/firebase";
-import MapaLeaflet from "./components/MapaLeaflet";
-import "./styles/main.css";
 
-// -----------------------------
-// Types
-// -----------------------------
-type Foto = { id: string; url: string; descricao?: string };
-type Unidade = {
-  id?: string;
-  unidade?: string;
-  n_unidade?: string;
-  area_privativa_m2?: number;
-  area_comum_m2?: number;
-  area_total_m2?: number;
-  dormitorios?: number;
-  suites?: number;
-  vagas?: number;
-  banheiros?: number;
-  observacoes?: string;
-  capaUrl?: string;
-  fotos?: Foto[];
-  createdAt?: any;
-};
+// ----------------- utils -----------------
+function uid(prefix = "id"): string {
+  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+}
 
-type Empreendimento = {
-  id?: string;
-  nome?: string;
-  endereco?: string;
-  lat?: number;
-  lng?: number;
-  descricao?: string;
-  capaUrl?: string;
-  createdAt?: any;
-};
-
-// -----------------------------
-// Helpers
-// -----------------------------
-const toNumber = (v: any): number | undefined => {
-  const n = parseFloat(String(v).replace(",", "."));
-  return Number.isFinite(n) ? n : undefined;
-};
-
-const fileToDataURL = (file: File) =>
-  new Promise<string>((resolve, reject) => {
+async function fileToDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
+    reader.onload = () => resolve(reader.result as string);
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
 
-// -----------------------------
-// UI Bits
-// -----------------------------
-const Input: React.FC<
-  React.InputHTMLAttributes<HTMLInputElement> & { label?: string }
-> = ({ label, className = "", ...props }) => (
-  <label className="block">
-    {label && (
-      <div className="text-sm text-gray-600 mb-1 font-medium">{label}</div>
-    )}
-    <input
-      {...props}
-      className={`border p-3 rounded w-full outline-none focus:ring focus:border-gray-700 ${className}`}
-    />
-  </label>
-);
+async function resizeImage(
+  file: File,
+  {
+    maxWidth = 1600,
+    maxHeight = 1200,
+    maxKB = 400,
+    quality = 0.85,
+  }: { maxWidth?: number; maxHeight?: number; maxKB?: number; quality?: number } = {}
+): Promise<string> {
+  const dataURL = await fileToDataURL(file);
+  const img = document.createElement("img");
+  img.src = dataURL;
+  await new Promise((res) => (img.onload = () => res(null)));
 
-const TextArea: React.FC<
-  React.TextareaHTMLAttributes<HTMLTextAreaElement> & { label?: string }
-> = ({ label, className = "", ...props }) => (
-  <label className="block">
-    {label && (
-      <div className="text-sm text-gray-600 mb-1 font-medium">{label}</div>
-    )}
-    <textarea
-      {...props}
-      className={`border p-3 rounded w-full outline-none focus:ring focus:border-gray-700 ${className}`}
-    />
-  </label>
-);
+  const canvas = document.createElement("canvas");
+  const ratio = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+  canvas.width = Math.round(img.width * ratio);
+  canvas.height = Math.round(img.height * ratio);
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-const Button: React.FC<
-  React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "ghost" | "danger" }
-> = ({ children, variant = "primary", className = "", ...props }) => {
-  const styles =
-    variant === "primary"
-      ? "bg-black text-white hover:bg-gray-800"
-      : variant === "danger"
-      ? "bg-red-600 text-white hover:bg-red-700"
-      : "bg-transparent text-black hover:bg-gray-100";
-  return (
+  let out = canvas.toDataURL("image/jpeg", quality);
+  const toKB = (b64: string) => Math.round((b64.length * 3) / 4 / 1024);
+  let q = quality;
+  while (toKB(out) > maxKB && q > 0.4) {
+    q -= 0.1;
+    out = canvas.toDataURL("image/jpeg", q);
+  }
+  return out;
+}
+
+// ----------------- tipos/UI -----------------
+type Tab = "empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario";
+
+// ----------------- Sidebar -----------------
+const Sidebar: React.FC<{
+  tab: Tab;
+  setTab: (t: Tab) => void;
+  onLogout: () => void;
+  userDoc: AppUserDoc;
+}> = ({ tab, setTab, onLogout, userDoc }) => {
+  const Item = ({ to, label }: { to: Tab; label: string }) => (
     <button
-      {...props}
-      className={`px-4 py-2 rounded transition ${styles} ${className}`}
+      onClick={() => setTab(to)}
+      className={`w-full text-left p-3 rounded transition hover:bg-gray-100 ${tab === to ? "bg-gray-100" : ""}`}
     >
-      {children}
+      {label}
     </button>
+  );
+
+  return (
+    <aside className="w-1/3 max-w-md bg-white border-r p-4">
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-lg font-semibold">Menu</h2>
+        <button onClick={onLogout} className="text-sm text-red-600">Sair</button>
+      </div>
+      <div className="space-y-2">
+        <Item to="empreendimentos" label="Empreendimentos" />
+        <Item to="mapa" label="Mapa" />
+        {userDoc.role === "admin" && (<>
+          <Item to="cadastrar" label="Cadastrar Empreendimento" />
+          <Item to="usuarios" label="Usuários" />
+        </>)}
+        <Item to="meu_usuario" label="Usuário" />
+      </div>
+      <div className="mt-6 text-sm text-gray-500">
+        Logado como <span className="font-medium">{userDoc.name || userDoc.email}</span>
+      </div>
+    </aside>
   );
 };
 
-// -----------------------------
-// Empreendimentos List
-// -----------------------------
-const EmpList: React.FC<{
-  onOpen: (emp: Empreendimento) => void;
-}> = ({ onOpen }) => {
-  const [items, setItems] = useState<Empreendimento[]>([]);
-
-  useEffect(() => {
-    const q = query(
-      collection(db, "empreendimentos") as CollectionReference,
-      orderBy("createdAt", "desc")
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const rows: Empreendimento[] = [];
-      snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
-      setItems(rows);
-    });
-    return () => unsub();
-  }, []);
-
+// ----------------- Ficha técnica -----------------
+const FichaTecnica: React.FC<{ emp: Emp & { id: string } }> = ({ emp }) => {
+  const Item = ({ label, value }: { label: string; value?: string | number }) => (
+    <div className="flex justify-between text-sm py-1">
+      <span className="text-gray-500">{label}</span>
+      <span className="font-medium">{value ?? "-"}</span>
+    </div>
+  );
   return (
-    <div className="space-y-4">
-      {items.length === 0 && (
-        <div className="text-gray-500">Nenhum empreendimento cadastrado.</div>
-      )}
-      <div className="grid gap-6 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
-        {items.map((e) => (
-          <div
-            key={e.id}
-            className="bg-white rounded-2xl shadow hover:shadow-md transition overflow-hidden"
-          >
-            <div className="aspect-[4/3] bg-gray-100 overflow-hidden">
-              {e.capaUrl ? (
-                <img
-                  src={e.capaUrl}
-                  className="w-full h-full object-cover"
-                  alt={e.nome}
-                />
-              ) : (
-                <div className="w-full h-full grid place-items-center text-gray-400">
-                  sem capa
-                </div>
-              )}
-            </div>
-            <div className="p-4">
-              <div className="text-lg font-semibold">{e.nome}</div>
-              <div className="text-gray-500 text-sm">{e.endereco}</div>
-              <div className="mt-3 flex gap-2">
-                <Button onClick={() => onOpen(e)}>Abrir</Button>
-              </div>
-            </div>
-          </div>
-        ))}
+    <div className="bg-white rounded-xl shadow p-4">
+      <h3 className="font-semibold mb-3">Ficha técnica</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+        <Item label="Unidade" value={emp.unidade} />
+        <Item label="Nº Unidade" value={emp.n_unidade} />
+        <Item label="Área M² Privativa" value={emp.area_privativa_m2} />
+        <Item label="Área M² Comum" value={emp.area_comum_m2} />
+        <Item label="Área M² Aberta" value={emp.area_aberta_m2} />
+        <Item label="Total M²" value={emp.total_m2} />
+        <Item label="Área Interna (R$)" value={emp.area_interna_rs} />
+        <Item label="Área Externa (R$)" value={emp.area_externa_rs} />
+        <Item label="Total (R$)" value={emp.total_rs} />
+        <Item label="Entrada (R$)" value={emp.entrada_rs} />
+        <Item label="Reforço (R$)" value={emp.reforco_rs} />
+        <Item label="Parcelas (R$)" value={emp.parcelas_rs} />
+        <Item label="Entrega das Chaves (R$)" value={emp.entrega_chaves_rs} />
       </div>
     </div>
   );
 };
 
-// -----------------------------
-// Unidades: Form + Table + Grid
-// -----------------------------
-const UnidadeForm: React.FC<{
-  empId: string;
-  onSaved?: () => void;
-}> = ({ empId, onSaved }) => {
-  const [form, setForm] = useState<Unidade>({});
-  const [fotoFile, setFotoFile] = useState<File | null>(null);
-
-  const set = (k: keyof Unidade) => (e: any) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
-
-  const handleAddFoto = async () => {
-    if (!fotoFile) return;
-    const url = await fileToDataURL(fotoFile);
-    setForm((f) => ({
-      ...f,
-      fotos: [...(f.fotos || []), { id: crypto.randomUUID(), url }],
-    }));
-    setFotoFile(null);
-  };
-
-  const handleSubmit = async (ev: React.FormEvent) => {
-    ev.preventDefault();
-    const payload: Unidade = {
-      ...form,
-      area_privativa_m2: toNumber(form.area_privativa_m2),
-      area_comum_m2: toNumber(form.area_comum_m2),
-      area_total_m2: toNumber(form.area_total_m2),
-      dormitorios: toNumber(form.dormitorios),
-      suites: toNumber(form.suites),
-      vagas: toNumber(form.vagas),
-      banheiros: toNumber(form.banheiros),
-      createdAt: serverTimestamp(),
-    };
-    await addDoc(collection(db, "empreendimentos", empId, "unidades"), payload);
-    setForm({});
-    onSaved?.();
-  };
+// ----------------- Lista/Álbum -----------------
+const EmpreendimentosView: React.FC<{
+  data: (Emp & { id: string })[];
+  isAdmin: boolean;
+  onDelete: (id: string) => void;
+}> = ({ data, isAdmin, onDelete }) => {
+  const [selected, setSelected] = useState<(Emp & { id: string }) | null>(null);
 
   return (
-    <form className="space-y-4" onSubmit={handleSubmit}>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Input label="Unidade" value={form.unidade || ""} onChange={set("unidade")} />
-        <Input label="Nº Unidade" value={form.n_unidade || ""} onChange={set("n_unidade")} />
-        <Input
-          label="Dormitórios"
-          value={form.dormitorios as any || ""}
-          onChange={set("dormitorios")}
-          inputMode="numeric"
-        />
-        <Input label="Suítes" value={form.suites as any || ""} onChange={set("suites")} inputMode="numeric" />
-        <Input label="Vagas" value={form.vagas as any || ""} onChange={set("vagas")} inputMode="numeric" />
-        <Input
-          label="Banheiros"
-          value={form.banheiros as any || ""}
-          onChange={set("banheiros")}
-          inputMode="numeric"
-        />
-        <Input
-          label="Área privativa (m²)"
-          value={form.area_privativa_m2 as any || ""}
-          onChange={set("area_privativa_m2")}
-          inputMode="decimal"
-        />
-        <Input
-          label="Área comum (m²)"
-          value={form.area_comum_m2 as any || ""}
-          onChange={set("area_comum_m2")}
-          inputMode="decimal"
-        />
-        <Input
-          label="Área total (m²)"
-          value={form.area_total_m2 as any || ""}
-          onChange={set("area_total_m2")}
-          inputMode="decimal"
-        />
+    <div className="space-y-6">
+      <h1 className="text-2xl font-semibold">Empreendimentos</h1>
+
+      {!selected && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {data.map((e) => (
+            <div key={e.id} className="bg-white rounded-xl shadow p-4">
+              <div className="aspect-video rounded-lg bg-gray-200 overflow-hidden mb-3">
+                {e.capaUrl ? (
+                  <img src={e.capaUrl} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-gray-500">
+                    Sem capa
+                  </div>
+                )}
+              </div>
+              <div className="font-medium">{e.nome}</div>
+              <div className="text-sm text-gray-500">{e.endereco}</div>
+              <div className="text-xs text-gray-400 mt-1">
+                {e.fotos?.length || 0} fotos
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <button onClick={() => setSelected(e)} className="text-blue-600 text-sm">
+                  Abrir álbum
+                </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => { if (confirm("Excluir este empreendimento?")) onDelete(e.id!); }}
+                    className="text-red-600 text-sm"
+                  >
+                    Excluir
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {selected && (
+        <div className="space-y-4">
+          <button onClick={() => setSelected(null)} className="text-sm text-blue-600">
+            ← Voltar
+          </button>
+          <div className="flex flex-col md:flex-row gap-6 items-start">
+            <div className="md:w-1/3 w-full">
+              <div className="rounded-lg overflow-hidden bg-gray-200 aspect-video mb-3">
+                {selected.capaUrl ? (
+                  <img src={selected.capaUrl} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-gray-500">
+                    Sem capa
+                  </div>
+                )}
+              </div>
+              <FichaTecnica emp={selected} />
+            </div>
+
+            <div className="flex-1 w-full">
+              <h2 className="text-xl font-semibold mb-2">{selected.nome}</h2>
+              <p className="text-gray-600 mb-4">{selected.endereco}</p>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {selected.fotos?.map((f) => (
+                  <figure key={f.id} className="bg-white rounded-lg overflow-hidden shadow">
+                    <img src={f.url} className="w-full h-40 object-cover" />
+                    <figcaption className="text-sm p-2">
+                      {f.descricao || "Sem descrição"}
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ----------------- Inputs -----------------
+const NumberInput = ({
+  label,
+  value,
+  setValue,
+  step = 0.01,
+}: {
+  label: string;
+  value: string;
+  setValue: (s: string) => void;
+  step?: number;
+}) => (
+  <div>
+    <label className="text-sm block mb-1">{label}</label>
+    <input
+      type="number"
+      step={step}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      className="w-full border p-2 rounded"
+    />
+  </div>
+);
+
+// ----------------- Cadastrar -----------------
+const CadastrarView: React.FC<{ onSave: (emp: Emp) => Promise<void> }> = ({ onSave }) => {
+  const [nome, setNome] = useState("");
+  const [endereco, setEndereco] = useState("");
+  const [lat, setLat] = useState("");
+  const [lng, setLng] = useState("");
+  const [descricao, setDescricao] = useState("");
+
+  const [unidade, setUnidade] = useState("");
+  const [nUnidade, setNUnidade] = useState("");
+  const [areaPriv, setAreaPriv] = useState("");
+  const [areaComum, setAreaComum] = useState("");
+  const [areaAberta, setAreaAberta] = useState("");
+  const [totalM2, setTotalM2] = useState("");
+  const [areaInt, setAreaInt] = useState("");
+  const [areaExt, setAreaExt] = useState("");
+  const [totalRs, setTotalRs] = useState("");
+  const [entrada, setEntrada] = useState("");
+  const [reforco, setReforco] = useState("");
+  const [parcelas, setParcelas] = useState("");
+  const [entrega, setEntrega] = useState("");
+
+  const [capaDataURL, setCapaDataURL] = useState<string>("");
+  const [loadingCapa, setLoadingCapa] = useState(false);
+  const [album, setAlbum] = useState<Foto[]>([]);
+  const [fotoLoading, setFotoLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <div className="max-w-5xl">
+      <h1 className="text-2xl font-semibold mb-4">Cadastrar Empreendimento</h1>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <label className="text-sm block mb-1">Nome</label>
+          <input value={nome} onChange={(e) => setNome(e.target.value)} className="w-full border p-2 rounded" />
+        </div>
+        <div>
+          <label className="text-sm block mb-1">Endereço</label>
+          <input value={endereco} onChange={(e) => setEndereco(e.target.value)} className="w-full border p-2 rounded" />
+        </div>
+        <div>
+          <label className="text-sm block mb-1">Latitude</label>
+          <input value={lat} onChange={(e) => setLat(e.target.value)} className="w-full border p-2 rounded" />
+        </div>
+        <div>
+          <label className="text-sm block mb-1">Longitude</label>
+          <input value={lng} onChange={(e) => setLng(e.target.value)} className="w-full border p-2 rounded" />
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-sm block mb-1">Descrição</label>
+          <textarea value={descricao} onChange={(e) => setDescricao(e.target.value)} className="w-full border p-2 rounded" />
+        </div>
       </div>
 
-      <TextArea
-        label="Observações"
-        value={form.observacoes || ""}
-        onChange={set("observacoes")}
-        rows={3}
-      />
+      <div className="bg-white rounded-xl shadow p-4 mt-6">
+        <h2 className="font-medium mb-3">Ficha técnica</h2>
+        <div className="grid gap-3 md:grid-cols-3">
+          <div>
+            <label className="text-sm block mb-1">Unidade</label>
+            <input value={unidade} onChange={(e) => setUnidade(e.target.value)} className="w-full border p-2 rounded" />
+          </div>
+          <div>
+            <label className="text-sm block mb-1">Nº Unidade</label>
+            <input value={nUnidade} onChange={(e) => setNUnidade(e.target.value)} className="w-full border p-2 rounded" />
+          </div>
+          <NumberInput label="Área M² Privativa" value={areaPriv} setValue={setAreaPriv} />
+          <NumberInput label="Área M² Comum" value={areaComum} setValue={setAreaComum} />
+          <NumberInput label="Área M² Aberta" value={areaAberta} setValue={setAreaAberta} />
+          <NumberInput label="Total M²" value={totalM2} setValue={setTotalM2} />
+          <NumberInput label="Área Interna (R$)" value={areaInt} setValue={setAreaInt} step={1} />
+          <NumberInput label="Área Externa (R$)" value={areaExt} setValue={setAreaExt} step={1} />
+          <NumberInput label="Total (R$)" value={totalRs} setValue={setTotalRs} step={1} />
+          <NumberInput label="Entrada (R$)" value={entrada} setValue={setEntrada} step={1} />
+          <NumberInput label="Reforço (R$)" value={reforco} setValue={setReforco} step={1} />
+          <NumberInput label="Parcelas (R$)" value={parcelas} setValue={setParcelas} step={1} />
+          <NumberInput label="Entrega das Chaves (R$)" value={entrega} setValue={setEntrega} step={1} />
+        </div>
+      </div>
 
-      {/* Álbum da unidade */}
-      <div className="p-4 rounded-2xl bg-gray-50 border">
-        <div className="font-semibold mb-2">Álbum da unidade</div>
-        <div className="flex items-center gap-2">
+      <div className="bg-white rounded-xl shadow p-4 mt-6">
+        <h2 className="font-medium mb-3">Capa</h2>
+        <div className="flex items-center gap-3">
           <input
             type="file"
             accept="image/*"
-            onChange={(e) => setFotoFile(e.target.files?.[0] || null)}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              setLoadingCapa(true);
+              try {
+                const dataURL = await resizeImage(file);
+                setCapaDataURL(dataURL);
+              } finally {
+                setLoadingCapa(false);
+              }
+            }}
           />
-          <Button type="button" variant="ghost" onClick={handleAddFoto}>
+          {loadingCapa && <span className="text-sm text-gray-500">Compactando...</span>}
+        </div>
+        {capaDataURL && (
+          <div className="mt-2">
+            <img src={capaDataURL} className="w-full max-w-sm rounded-lg shadow" />
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-xl shadow p-4 mt-6">
+        <h2 className="font-medium mb-3">Álbum de fotos</h2>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input id="desc" placeholder="Ex.: Sala" className="border p-2 rounded text-sm w-40" />
+          <input id="fileFoto" type="file" accept="image/*" className="border p-2 rounded text-sm" />
+          <button
+            className="px-3 py-2 bg-blue-600 text-white text-sm rounded"
+            onClick={async () => {
+              const desc = (document.getElementById("desc") as HTMLInputElement).value.trim();
+              const file = (document.getElementById("fileFoto") as HTMLInputElement).files?.[0];
+              if (!file) return;
+              setFotoLoading(true);
+              try {
+                const dataURL = await resizeImage(file, { quality: 0.85 });
+                setAlbum((arr) => [...arr, { id: uid("f"), url: dataURL, descricao: desc }]);
+                (document.getElementById("desc") as HTMLInputElement).value = "";
+                (document.getElementById("fileFoto") as HTMLInputElement).value = "";
+              } finally {
+                setFotoLoading(false);
+              }
+            }}
+          >
             Adicionar foto
-          </Button>
+          </button>
+          {fotoLoading && <span className="text-sm text-gray-500">Compactando...</span>}
         </div>
 
-        {form.fotos && form.fotos.length > 0 && (
-          <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-            {form.fotos.map((f) => (
-              <div key={f.id} className="aspect-square rounded-lg overflow-hidden border">
-                <img src={f.url} className="w-full h-full object-cover" />
-              </div>
+        {album.length > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+            {album.map((f) => (
+              <figure key={f.id} className="bg-white rounded-lg overflow-hidden shadow">
+                <img src={f.url} className="w-full h-32 object-cover" />
+                <figcaption className="text-xs p-2">{f.descricao || "Sem descrição"}</figcaption>
+              </figure>
             ))}
           </div>
         )}
       </div>
 
-      <div className="flex justify-end">
-        <Button type="submit">Salvar unidade</Button>
-      </div>
-    </form>
-  );
-};
+      <button
+        disabled={saving}
+        onClick={async () => {
+          if (!nome) return;
+          setSaving(true);
+          try {
+            const emp: Emp = {
+              nome,
+              endereco,
+              lat: lat ? Number(lat) : undefined,
+              lng: lng ? Number(lng) : undefined,
+              descricao,
+              unidade,
+              n_unidade: nUnidade,
+              area_privativa_m2: areaPriv ? Number(areaPriv) : undefined,
+              area_comum_m2: areaComum ? Number(areaComum) : undefined,
+              area_aberta_m2: areaAberta ? Number(areaAberta) : undefined,
+              total_m2: totalM2 ? Number(totalM2) : undefined,
+              area_interna_rs: areaInt ? Number(areaInt) : undefined,
+              area_externa_rs: areaExt ? Number(areaExt) : undefined,
+              total_rs: totalRs ? Number(totalRs) : undefined,
+              entrada_rs: entrada ? Number(entrada) : undefined,
+              reforco_rs: reforco ? Number(reforco) : undefined,
+              parcelas_rs: parcelas ? Number(parcelas) : undefined,
+              entrega_chaves_rs: entrega ? Number(entrega) : undefined,
+              fotos: [],
+            };
 
-const FotosGridModal: React.FC<{
-  open: boolean;
-  onClose: () => void;
-  fotos: Foto[];
-}> = ({ open, onClose, fotos }) => {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 bg-black/60 grid place-items-center p-6 z-50">
-      <div className="bg-white rounded-2xl p-4 max-w-5xl w-full">
-        <div className="flex justify-between items-center mb-3">
-          <div className="text-lg font-semibold">Fotos da unidade</div>
-          <Button variant="ghost" onClick={onClose}>Fechar</Button>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-h-[70vh] overflow-auto">
-          {fotos?.map((f) => (
-            <div key={f.id} className="aspect-square overflow-hidden rounded-lg border">
-              <img src={f.url} className="w-full h-full object-cover" />
-            </div>
-          ))}
-        </div>
-      </div>
+            const newId = await addEmpreendimento(emp);
+
+            const capaUrl = capaDataURL || "/assets/mock.jpg";
+            const fotosSubidas: Foto[] = album;
+
+            await updateDoc(docRef(getFirestore(), "empreendimentos", newId), {
+              capaUrl: capaUrl || null,
+              fotos: fotosSubidas,
+            });
+
+            setNome(""); setEndereco(""); setLat(""); setLng(""); setDescricao("");
+            setUnidade(""); setNUnidade(""); setAreaPriv(""); setAreaComum("");
+            setAreaAberta(""); setTotalM2(""); setAreaInt(""); setAreaExt("");
+            setTotalRs(""); setEntrada(""); setReforco(""); setParcelas(""); setEntrega("");
+            setCapaDataURL(""); setAlbum([]);
+
+            alert("Empreendimento salvo!");
+          } finally {
+            setSaving(false);
+          }
+        }}
+        className="mt-6 px-4 py-2 bg-blue-600 text-white rounded"
+      >
+        {saving ? "Salvando..." : "Salvar Empreendimento"}
+      </button>
     </div>
   );
 };
 
-const UnidadesTable: React.FC<{
-  empId: string;
-}> = ({ empId }) => {
-  const [rows, setRows] = useState<Unidade[]>([]);
-  const [gridOpen, setGridOpen] = useState(false);
-  const [gridFotos, setGridFotos] = useState<Foto[]>([]);
+// ----------------- Usuários (admin) -----------------
+const UsuariosAdminView: React.FC = () => {
+  const db = getFirestore();
+  const [list, setList] = useState<{ id: string; data: AppUserDoc }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"admin" | "user">("user");
+  const [mustChange, setMustChange] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const q = query(
-      collection(db, "empreendimentos", empId, "unidades") as CollectionReference,
-      orderBy("createdAt", "desc")
-    );
+    const q = query(collection(db, "users"), orderBy("email"));
     const unsub = onSnapshot(q, (snap) => {
-      const arr: Unidade[] = [];
-      snap.forEach((d) => arr.push({ id: d.id, ...(d.data() as any) }));
-      setRows(arr);
+      const arr: { id: string; data: AppUserDoc }[] = [];
+      snap.forEach((d) => arr.push({ id: d.id, data: d.data() as AppUserDoc }));
+      setList(arr);
+      setLoading(false);
     });
     return () => unsub();
-  }, [empId]);
+  }, [db]);
 
   return (
-    <div className="overflow-auto">
-      <table className="min-w-full text-sm">
-        <thead className="text-left bg-gray-50">
-          <tr>
-            <th className="p-3">Unidade</th>
-            <th className="p-3">Nº</th>
-            <th className="p-3">Dorms</th>
-            <th className="p-3">Suítes</th>
-            <th className="p-3">Vagas</th>
-            <th className="p-3">Priv. (m²)</th>
-            <th className="p-3">Comum (m²)</th>
-            <th className="p-3">Total (m²)</th>
-            <th className="p-3">Fotos</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((u) => (
-            <tr key={u.id} className="border-b">
-              <td className="p-3">{u.unidade}</td>
-              <td className="p-3">{u.n_unidade}</td>
-              <td className="p-3">{u.dormitorios ?? "-"}</td>
-              <td className="p-3">{u.suites ?? "-"}</td>
-              <td className="p-3">{u.vagas ?? "-"}</td>
-              <td className="p-3">{u.area_privativa_m2 ?? "-"}</td>
-              <td className="p-3">{u.area_comum_m2 ?? "-"}</td>
-              <td className="p-3">{u.area_total_m2 ?? "-"}</td>
-              <td className="p-3">
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setGridFotos(u.fotos || []);
-                    setGridOpen(true);
-                  }}
-                >
-                  Abrir fotos ({u.fotos?.length || 0})
-                </Button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="max-w-4xl">
+      <h1 className="text-2xl font-semibold mb-4">Usuários</h1>
+      <p className="text-sm text-gray-500 mb-4">
+        <b>Adicionar usuário (somente Firestore)</b>: este botão só cria/edita o documento na coleção <code>users</code>.
+        Para permitir login, crie o usuário também em <i>Authentication → Users</i> no Console do Firebase.
+      </p>
 
-      <FotosGridModal open={gridOpen} onClose={() => setGridOpen(false)} fotos={gridFotos} />
+      <div className="bg-white rounded-xl shadow p-4 mb-6">
+        <h2 className="font-medium mb-3">Adicionar/Atualizar usuário (Firestore)</h2>
+        <div className="grid md:grid-cols-4 gap-3">
+          <input placeholder="Nome" value={name} onChange={(e) => setName(e.target.value)} className="border p-2 rounded" />
+          <input placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} className="border p-2 rounded" />
+          <select value={role} onChange={(e) => setRole(e.target.value as "admin" | "user")} className="border p-2 rounded">
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+          </select>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={mustChange} onChange={(e) => setMustChange(e.target.checked)} />
+            Troca obrigatória?
+          </label>
+        </div>
+        <button
+          disabled={saving}
+          onClick={async () => {
+            if (!email) { alert("Informe ao menos o e-mail."); return; }
+            setSaving(true);
+            try {
+              await addDoc(collection(db, "users"), {
+                name: name || email.split("@")[0],
+                email,
+                role,
+                mustChangePassword: mustChange,
+              });
+              setName(""); setEmail(""); setRole("user"); setMustChange(true);
+            } finally { setSaving(false); }
+          }}
+          className="mt-3 px-3 py-2 bg-blue-600 text-white rounded"
+        >
+          {saving ? "Salvando..." : "Adicionar (Firestore)"}
+        </button>
+      </div>
+
+      <div className="bg-white rounded-xl shadow p-4">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-500">
+              <th className="py-2">Nome</th>
+              <th className="py-2">E-mail</th>
+              <th className="py-2">Perfil</th>
+              <th className="py-2">Troca obrigatória?</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && <tr><td className="py-3" colSpan={4}>Carregando...</td></tr>}
+            {!loading && list.map(({ id, data }) => (
+              <tr key={id} className="border-t">
+                <td className="py-2">{data.name}</td>
+                <td className="py-2">{data.email}</td>
+                <td className="py-2">{data.role}</td>
+                <td className="py-2">
+                  {data.mustChangePassword ? "Sim" : "Não"}{" "}
+                  <button
+                    onClick={async () => {
+                      await updateDoc(docRef(getFirestore(), "users", id), {
+                        mustChangePassword: !data.mustChangePassword,
+                      });
+                    }}
+                    className="ml-3 text-blue-600"
+                  >
+                    Alternar
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };
 
-// -----------------------------
-// Empreendimento Detail
-// -----------------------------
-const EmpDetail: React.FC<{
-  empId: string;
-  onBack: () => void;
-}> = ({ empId, onBack }) => {
-  const [emp, setEmp] = useState<Empreendimento | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "empreendimentos", empId), (d) => {
-      setEmp({ id: d.id, ...(d.data() as any) });
-    });
-    return () => unsub();
-  }, [empId]);
-
-  const set = (k: keyof Empreendimento) => (e: any) =>
-    setEmp((f) => (f ? { ...f, [k]: e.target.value } : f));
-
-  const handleSaveEmp = async (ev: React.FormEvent) => {
-    ev.preventDefault();
-    if (!emp) return;
-    let capaUrl = emp.capaUrl;
-    if (file) {
-      capaUrl = await fileToDataURL(file);
-    }
-    const payload: Empreendimento = {
-      nome: emp.nome || "",
-      endereco: emp.endereco || "",
-      lat: toNumber(emp.lat),
-      lng: toNumber(emp.lng),
-      descricao: emp.descricao || "",
-      capaUrl,
-    };
-    await updateDoc(doc(db, "empreendimentos", empId), payload as any);
-    setFile(null);
-  };
-
-  const handleDelete = async () => {
-    if (!confirm("Excluir este empreendimento?")) return;
-    await deleteDoc(doc(db, "empreendimentos", empId));
-    onBack();
-  };
-
-  if (!emp) return null;
+// ----------------- Login -----------------
+const Login: React.FC = () => {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" onClick={onBack}>← Voltar</Button>
-        <div className="text-2xl font-bold">Editar empreendimento</div>
-      </div>
-
-      <form className="space-y-4" onSubmit={handleSaveEmp}>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Input label="Nome" value={emp.nome || ""} onChange={set("nome")} />
-          <Input label="Endereço" value={emp.endereco || ""} onChange={set("endereco")} />
-          <Input label="Latitude" value={emp.lat as any || ""} onChange={set("lat")} inputMode="decimal" />
-          <Input label="Longitude" value={emp.lng as any || ""} onChange={set("lng")} inputMode="decimal" />
+    <div className="min-h-screen flex items-center justify-center bg-[#F3F3F3] text-black relative">
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setLoading(true);
+          try { await login(email, password); }
+          catch (e: any) { alert(e?.message || "Erro ao entrar"); }
+          finally { setLoading(false); }
+        }}
+        className="bg-white p-8 rounded-2xl w-full max-w-sm shadow-xl border border-gray-200"
+      >
+        <div className="-mx-8 -mt-8 mb-6 px-8 py-4 bg-black rounded-t-2xl text-white text-center">
+          <h1 className="text-2xl font-bold">Kolling | Book de Empreendimentos</h1>
         </div>
-        <TextArea label="Descrição" value={emp.descricao || ""} onChange={set("descricao")} rows={3} />
-        <div className="p-4 rounded-2xl bg-gray-50 border">
-          <div className="font-semibold mb-2">Capa do empreendimento</div>
-          <div className="flex items-center gap-3">
-            <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-            <div className="w-28 h-28 rounded-lg overflow-hidden border bg-white">
-              {emp.capaUrl ? (
-                <img src={emp.capaUrl} className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full grid place-items-center text-xs text-gray-500">sem capa</div>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="flex gap-2 justify-end">
-          <Button type="button" variant="danger" onClick={handleDelete}>Excluir empreendimento</Button>
-          <Button type="submit">Salvar</Button>
-        </div>
+        <label className="block text-sm mb-1">E-mail</label>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} className="w-full mb-4 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
+        <label className="block text-sm mb-1">Senha</label>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full mb-6 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
+        <button disabled={loading} className="w-full py-2 rounded bg-black text-white hover:opacity-90 disabled:opacity-60">
+          {loading ? "Entrando..." : "Entrar"}
+        </button>
       </form>
 
-      {/* Unidades */}
-      <div className="pt-6 border-t">
-        <div className="text-xl font-bold mb-3">Unidades</div>
-        <UnidadeForm empId={empId} />
-      </div>
-
-      <div className="pt-4">
-        <UnidadesTable empId={empId} />
+      <div className="absolute bottom-4 left-0 right-0 text-center text-xs text-gray-700">
+        Propriedade Inova Análise
       </div>
     </div>
   );
 };
 
-// -----------------------------
-// Shell + Routes (simple state router)
-// -----------------------------
-type View = "list" | "map" | "detail";
+// ----------------- App -----------------
+export default function App() {
+  const [firebaseReady, setFirebaseReady] = useState(false);
+  const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
+  const [empList, setEmpList] = useState<(Emp & { id: string })[]>([]);
+  const [tab, setTab] = useState<"empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario">("empreendimentos");
 
-const App: React.FC = () => {
-  const [view, setView] = useState<View>("list");
-  const [openEmp, setOpenEmp] = useState<Empreendimento | null>(null);
+  useEffect(() => {
+    const unsub = listenAuth(async (u) => {
+      if (!u) { setUserDoc(null); setFirebaseReady(true); return; }
+      let doc = await getUserDoc(u.uid);
+      if (!doc) {
+        doc = { name: u.email?.split("@")[0] || "Usuário", email: u.email || "", role: "user", mustChangePassword: false };
+        await ensureUserDoc(u.uid, doc);
+      }
+      setUserDoc(doc); setFirebaseReady(true);
+    });
+    return () => unsub();
+  }, []);
 
-  const goList = () => { setOpenEmp(null); setView("list"); };
-  const goMap  = () => setView("map");
+  useEffect(() => {
+    const unsub = listenEmpreendimentos((list) => setEmpList(list));
+    return () => unsub();
+  }, []);
 
-  const handleOpen = (emp: Empreendimento) => {
-    setOpenEmp(emp);
-    setView("detail");
-  };
+  if (!firebaseReady) return null;
+  if (!auth.currentUser) return <Login />;
 
-  const handleCreate = async () => {
-    const nome = prompt("Nome do empreendimento:");
-    if (!nome) return;
-    const payload: Empreendimento = {
-      nome,
-      endereco: "",
-      lat: -27.5945,
-      lng: -48.5477,
-      descricao: "",
-      capaUrl: "",
-      createdAt: serverTimestamp(),
-    };
-    const ref = await addDoc(collection(db, "empreendimentos"), payload as any);
-    setOpenEmp({ ...payload, id: ref.id });
-    setView("detail");
-  };
+  const effectiveTab = tab;
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      <div className="mx-auto max-w-7xl p-6 grid grid-cols-1 md:grid-cols-[250px,1fr] gap-6">
-        {/* Sidebar */}
-        <aside className="bg-white rounded-2xl shadow p-4 h-fit">
-          <div className="text-lg font-bold mb-4">Menu</div>
-          <nav className="space-y-2">
-            <Button variant={view === "list" ? "primary" : "ghost"} className="w-full justify-start" onClick={goList}>
-              Empreendimentos
-            </Button>
-            <Button variant={view === "map" ? "primary" : "ghost"} className="w-full justify-start" onClick={goMap}>
-              Mapa
-            </Button>
-            <div className="pt-3">
-              <Button className="w-full" onClick={handleCreate}>Novo empreendimento</Button>
-            </div>
-          </nav>
-        </aside>
+    <div className="min-h-screen flex bg-gray-100">
+      <Sidebar tab={effectiveTab} setTab={setTab} onLogout={() => logout()} userDoc={userDoc!} />
 
-        {/* Content */}
-        <main className="bg-white rounded-2xl shadow p-6">
-          {view === "list" && (
-            <div className="space-y-4">
-              <div className="text-2xl font-bold">Empreendimentos</div>
-              <EmpList onOpen={handleOpen} />
-            </div>
-          )}
+      <main className="flex-1 p-6">
+        {effectiveTab === "empreendimentos" && (
+          <EmpreendimentosView
+            data={empList}
+            isAdmin={userDoc?.role === "admin"}
+            onDelete={async (id) => {
+              try { await deleteEmpreendimento(id); }
+              catch (e: any) { alert(e?.message || "Erro ao excluir"); }
+            }}
+          />
+        )}
 
-          {view === "map" && (
-            <div className="space-y-4">
-              <div className="text-2xl font-bold">Mapa de Empreendimentos</div>
-              <MapaLeaflet />
-            </div>
-          )}
+        {effectiveTab === "mapa" && (
+          <MapaLeaflet empreendimentos={empList as any} />
+        )}
 
-          {view === "detail" && openEmp?.id && (
-            <EmpDetail empId={openEmp.id} onBack={goList} />
-          )}
-        </main>
-      </div>
+        {effectiveTab === "cadastrar" && userDoc?.role === "admin" && (
+          <CadastrarView onSave={async (emp) => { await addEmpreendimento(emp); }} />
+        )}
+
+        {effectiveTab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
+
+        {effectiveTab === "meu_usuario" && <Account />}
+      </main>
     </div>
   );
-};
-
-export default App;
+}
