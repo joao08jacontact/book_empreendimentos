@@ -37,15 +37,15 @@ import {
 } from "firebase/firestore";
 
 
-function verFotosUnidade(u) {
-  const safe = (v) => (v ?? '-') ;
+function verFotosUnidade(u: any) {
+  const safe = (v: any) => (v ?? '-') ;
   const ficha = `
     <div style="padding:16px 16px 8px 16px;background:#fff;border-radius:12px;margin:12px;box-shadow:0 2px 10px rgba(0,0,0,.06);font-family:ui-sans-serif,system-ui">
       <div style="font-weight:600;margin-bottom:8px;font-size:16px">Ficha técnica — ${safe(u.titulo)}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;font-size:14px">
         <div><b>Unidade:</b> ${safe(u.titulo)}</div>
         <div><b>Nº Unidade:</b> ${safe(u.n_unidade)}</div>
-        <div><b>Área M² Privativa:</b> ${safe(u.area_priv_m2)}</div>
+        <div><b>Área M² Privativa:</b> ${safe(u.area_privativa_m2)}</div>
         <div><b>Área M² Comum:</b> ${safe(u.area_comum_m2)}</div>
         <div><b>Área M² Aberta:</b> ${safe(u.area_aberta_m2)}</div>
         <div><b>Total M²:</b> ${safe(u.total_m2)}</div>
@@ -59,9 +59,9 @@ function verFotosUnidade(u) {
       </div>
     </div>`;
 
-  const imgs = (u.fotos || []).map((f, i) => 
+  const imgs = (u.fotos || []).map((f: string) => 
     `<img src="${f}" onclick="(function(el){if(el.style.maxWidth){el.style.maxWidth='';el.style.maxHeight='';el.style.boxShadow='';}else{el.style.maxWidth='90vw';el.style.maxHeight='90vh';el.style.boxShadow='0 10px 30px rgba(0,0,0,.4)';}})(this)" 
-      style="width:240px;height:240px;object-fit:cover;margin:10px;border-radius:10px;cursor:pointer;transition:all .2s ease" />`
+      style="width:260px;height:260px;object-fit:cover;margin:10px;border-radius:10px;cursor:pointer;transition:all .2s ease" />`
   ).join('');
 
   const html = `
@@ -104,9 +104,9 @@ async function resizeImage(
   await new Promise((res) => (img.onload = () => res(null)));
 
   const canvas = document.createElement("canvas");
-  const ratio = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
-  canvas.width = Math.round(img.width * ratio);
-  canvas.height = Math.round(img.height * ratio);
+  const ratio = Math.min(maxWidth / (img as any).width, maxHeight / (img as any).height, 1);
+  canvas.width = Math.round((img as any).width * ratio);
+  canvas.height = Math.round((img as any).height * ratio);
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
@@ -302,9 +302,7 @@ const EmpreendimentosView: React.FC<{
                   <div className="w-full h-full flex items-center justify-center text-gray-500">Sem capa</div>
                 )}
               </div>
-              {/* Se houver ao menos uma unidade, mostre ficha da primeira como preview */}
-              {selectedUnidades.length > 0 &&
-}
+              {/* A ficha técnica NÃO aparece mais aqui (é por unidade, mostrada ao abrir fotos) */}
             </div>
 
             <div className="space-y-4">
@@ -314,24 +312,24 @@ const EmpreendimentosView: React.FC<{
               </div>
 
               {/* Cards de UNIDADES (hierarquia) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
                 {selectedUnidades.length === 0 && (
                   <div className="text-gray-500">Nenhuma unidade cadastrada neste empreendimento.</div>
                 )}
                 {selectedUnidades.map((u) => {
                   const thumb = u.fotos?.[0];
                   return (
-                    <div key={u.id} className="bg-white rounded-xl shadow p-4 w-full max-w-xl">
-                      <div className="aspect-[16/9] rounded-lg overflow-hidden bg-gray-200 mb-2">
+                    <div key={u.id} className="bg-white rounded-2xl shadow p-5 w-full">
+                      <div className="aspect-[16/9] rounded-xl overflow-hidden bg-gray-200 mb-3">
                         {thumb ? (
                           <img src={thumb} className="w-full h-full object-cover" />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center text-gray-500">Sem foto</div>
                         )}
                       </div>
-                      <div className="font-medium">{u.titulo || "Unidade"}</div>
+                      <div className="font-medium text-lg">{u.titulo || "Unidade"}</div>
                       <div className="text-xs text-gray-500">{u.n_unidade ? `Nº ${u.n_unidade}` : "-"}</div>
-                      <div className="mt-2">
+                      <div className="mt-3">
                         <button
                           className="text-blue-600 text-sm"
                           onClick={() => verFotosUnidade(u)}
