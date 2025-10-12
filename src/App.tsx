@@ -1,10 +1,8 @@
 // src/App.tsx — Modo teste + Mapa real (React-Leaflet)
 // - Usa <MapaLeaflet /> (OpenStreetMap)
 // - Uploads simulados (dataURL) — sem Firebase Storage
-// - Ficha técnica completa por UNIDADE no cadastro e na visualização de uma unidade
+// - Ficha técnica completa por UNIDADE no cadastro
 // - Painel de Empreendimentos com hierarquia (Empreendimento → Unidades)
-// - Capa do empreendimento: mostra `capa` (DataURL) OU `capaUrl` (legado)
-// - Álbum da unidade: thumbs maiores + clique para abrir em “tela cheia” (popup)
 // - Tela Usuários com “Adicionar (Firestore)”
 // - <Account /> importado
 // ----------------------------------------------------------------------
@@ -22,6 +20,7 @@ import {
   ensureUserDoc,
   AppUserDoc,
   Emp,
+  Foto,
   listenEmpreendimentos,
   deleteEmpreendimento,
 } from "./lib/firebase";
@@ -36,6 +35,45 @@ import {
   updateDoc,
   addDoc,
 } from "firebase/firestore";
+
+
+function verFotosUnidade(u) {
+  const safe = (v) => (v ?? '-') ;
+  const ficha = `
+    <div style="padding:16px 16px 8px 16px;background:#fff;border-radius:12px;margin:12px;box-shadow:0 2px 10px rgba(0,0,0,.06);font-family:ui-sans-serif,system-ui">
+      <div style="font-weight:600;margin-bottom:8px;font-size:16px">Ficha técnica — ${safe(u.titulo)}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;font-size:14px">
+        <div><b>Unidade:</b> ${safe(u.titulo)}</div>
+        <div><b>Nº Unidade:</b> ${safe(u.n_unidade)}</div>
+        <div><b>Área M² Privativa:</b> ${safe(u.area_priv_m2)}</div>
+        <div><b>Área M² Comum:</b> ${safe(u.area_comum_m2)}</div>
+        <div><b>Área M² Aberta:</b> ${safe(u.area_aberta_m2)}</div>
+        <div><b>Total M²:</b> ${safe(u.total_m2)}</div>
+        <div><b>Área Interna (R$):</b> ${safe(u.area_interna_rs)}</div>
+        <div><b>Área Externa (R$):</b> ${safe(u.area_externa_rs)}</div>
+        <div><b>Total (R$):</b> ${safe(u.total_rs)}</div>
+        <div><b>Entrada (R$):</b> ${safe(u.entrada_rs)}</div>
+        <div><b>Reforço (R$):</b> ${safe(u.reforco_rs)}</div>
+        <div><b>Parcelas (R$):</b> ${safe(u.parcelas_rs)}</div>
+        <div><b>Entrega das Chaves (R$):</b> ${safe(u.entrega_chaves_rs)}</div>
+      </div>
+    </div>`;
+
+  const imgs = (u.fotos || []).map((f, i) => 
+    `<img src="${f}" onclick="(function(el){if(el.style.maxWidth){el.style.maxWidth='';el.style.maxHeight='';el.style.boxShadow='';}else{el.style.maxWidth='90vw';el.style.maxHeight='90vh';el.style.boxShadow='0 10px 30px rgba(0,0,0,.4)';}})(this)" 
+      style="width:240px;height:240px;object-fit:cover;margin:10px;border-radius:10px;cursor:pointer;transition:all .2s ease" />`
+  ).join('');
+
+  const html = `
+    <title>Fotos — ${safe(u.titulo)}</title>
+    <div style="padding:12px;background:#f7f7f7;min-height:100vh">
+      ${ficha}
+      <div style="display:flex;flex-wrap:wrap;align-items:flex-start">${imgs}</div>
+    </div>`;
+
+  const w = window.open("", "_blank", "width=1200,height=800");
+  if (w) w.document.write(html);
+}
 
 // ----------------- utils -----------------
 function uid(prefix = "id"): string {
@@ -85,6 +123,7 @@ async function resizeImage(
 // ----------------- tipos/UI -----------------
 type Tab = "empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario";
 
+// Tudo que será salvo no Firestore quando você estiver no modo “teste” (sem Storage)
 export type Unidade = {
   id: string;
   titulo: string;
@@ -101,7 +140,8 @@ export type Unidade = {
   reforco_rs?: number;
   parcelas_rs?: number;
   entrega_chaves_rs?: number;
-  fotos: string[]; // DataURLs
+  // album (DataURLs)
+  fotos: string[];
 };
 
 export type EmpreendimentoForm = {
@@ -111,7 +151,7 @@ export type EmpreendimentoForm = {
   lat?: number;
   lng?: number;
   descricao?: string;
-  capa?: string; // DataURL em modo teste
+  capa?: string; // DataURL (modo teste)
   unidades: Unidade[];
 };
 
@@ -193,48 +233,9 @@ const EmpreendimentosView: React.FC<{
   const [selected, setSelected] = useState<(Emp & { id: string }) | null>(null);
   const selectedUnidades: Unidade[] = useMemo(() => {
     if (!selected) return [];
+    // Emp do Firestore pode não declarar, então tratamos como any
     return (selected as any).unidades ?? [];
   }, [selected]);
-
-  // Abre fotos (popup) com clique-to-fullscreen
-  const openFotos = (fotos: string[]) => {
-    const html = `
-      <html>
-      <head>
-        <title>Fotos</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <style>
-          body{margin:0;background:#f7f7f7;font-family:system-ui,Segoe UI,Roboto,Arial}
-          .grid{display:flex;flex-wrap:wrap;padding:16px;gap:12px;align-items:flex-start}
-          img{width:220px;height:220px;object-fit:cover;border-radius:14px;cursor:zoom-in;box-shadow:0 2px 10px rgba(0,0,0,.08)}
-          .full{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:10}
-          .full img{max-width:92vw;max-height:92vh;width:auto;height:auto;cursor:zoom-out;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
-        </style>
-      </head>
-      <body>
-        <div class="grid">
-          ${fotos
-            .map(
-              (f, i) =>
-                `<img src="${f}" data-i="${i}" onclick="show(this.src)" alt="foto ${i+1}"/>`
-            )
-            .join("")}
-        </div>
-        <div class="full" id="full" onclick="hide()">
-          <img id="fullimg" src=""/>
-        </div>
-        <script>
-          function show(src){
-            document.getElementById('fullimg').src = src;
-            document.getElementById('full').style.display='flex';
-          }
-          function hide(){ document.getElementById('full').style.display='none'; }
-        </script>
-      </body>
-      </html>`;
-    const w = window.open("", "_blank", "width=1200,height=800");
-    if (w) w.document.write(html);
-  };
 
   return (
     <div className="space-y-6">
@@ -245,9 +246,7 @@ const EmpreendimentosView: React.FC<{
           {data.map((e) => (
             <div key={e.id} className="bg-white rounded-2xl shadow p-4">
               <div className="aspect-video rounded-xl bg-gray-200 overflow-hidden mb-3">
-                {(e as any).capa ? (
-                  <img src={(e as any).capa} className="w-full h-full object-cover" />
-                ) : e.capaUrl ? (
+                {e.capaUrl ? (
                   <img src={e.capaUrl} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-gray-500">
@@ -258,7 +257,7 @@ const EmpreendimentosView: React.FC<{
               <div className="font-semibold text-lg">{e.nome}</div>
               <div className="text-sm text-gray-500">{e.endereco}</div>
               <div className="text-xs text-gray-400 mt-1">
-                {(e as any)?.unidades?.length ? `${(e as any).unidades.length} unidade(s)` : `${(e as any).fotos?.length || 0} fotos`}
+                {(e as any)?.unidades?.length ? `${(e as any).unidades.length} unidade(s)` : `${e.fotos?.length || 0} fotos`}
               </div>
               <div className="mt-3 flex items-center gap-4">
                 <button onClick={() => setSelected(e)} className="text-blue-600 text-sm">
@@ -303,8 +302,9 @@ const EmpreendimentosView: React.FC<{
                   <div className="w-full h-full flex items-center justify-center text-gray-500">Sem capa</div>
                 )}
               </div>
-              {/* Preview: se houver ao menos uma unidade, mostramos a ficha da primeira */}
-              {selectedUnidades.length > 0 && <FichaTecnica u={selectedUnidades[0]} />}
+              {/* Se houver ao menos uma unidade, mostre ficha da primeira como preview */}
+              {selectedUnidades.length > 0 &&
+}
             </div>
 
             <div className="space-y-4">
@@ -321,8 +321,8 @@ const EmpreendimentosView: React.FC<{
                 {selectedUnidades.map((u) => {
                   const thumb = u.fotos?.[0];
                   return (
-                    <div key={u.id} className="bg-white rounded-xl shadow p-4">
-                      <div className="aspect-square rounded-lg overflow-hidden bg-gray-200 mb-3">
+                    <div key={u.id} className="bg-white rounded-xl shadow p-4 w-full max-w-xl">
+                      <div className="aspect-[16/9] rounded-lg overflow-hidden bg-gray-200 mb-2">
                         {thumb ? (
                           <img src={thumb} className="w-full h-full object-cover" />
                         ) : (
@@ -331,16 +331,10 @@ const EmpreendimentosView: React.FC<{
                       </div>
                       <div className="font-medium">{u.titulo || "Unidade"}</div>
                       <div className="text-xs text-gray-500">{u.n_unidade ? `Nº ${u.n_unidade}` : "-"}</div>
-
-                      {/* Ficha técnica da unidade */}
-                      <div className="mt-3">
-                        <FichaTecnica u={u} />
-                      </div>
-
-                      <div className="mt-3">
+                      <div className="mt-2">
                         <button
                           className="text-blue-600 text-sm"
-                          onClick={() => openFotos(u.fotos || [])}
+                          onClick={() => verFotosUnidade(u)}
                         >
                           Abrir fotos ({u.fotos?.length || 0})
                         </button>
@@ -388,7 +382,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     lat: editing?.lat,
     lng: editing?.lng,
     descricao: editing?.descricao || "",
-    capa: (editing as any)?.capa || editing?.capa, // aceita legado
+    capa: editing?.capa,
     unidades: editing?.unidades || [],
   });
 
@@ -588,7 +582,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
             />
           </LabeledInput>
           <LabeledInput label="Área M² Aberta">
-        <input
+            <input
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.area_aberta_m2 ?? ""}
               onChange={(e) =>
@@ -677,7 +671,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
           {unidadeDraft.fotos.length > 0 && (
             <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
               {unidadeDraft.fotos.map((f, i) => (
-                <img key={i} src={f} className="w-full aspect-square object-cover rounded-lg" />
+                <img key={i} src={f} className="w-full aspect-[16/9] object-cover rounded-lg" />
               ))}
             </div>
           )}
@@ -942,21 +936,6 @@ export default function App() {
   if (!firebaseReady) return null;
   if (!auth.currentUser) return <Login />;
 
-  const onEditRequest = (emp: Emp & { id: string }) => {
-    const form: EmpreendimentoForm = {
-      id: emp.id,
-      nome: emp.nome || "",
-      endereco: (emp as any).endereco || "",
-      lat: (emp as any).lat,
-      lng: (emp as any).lng,
-      descricao: (emp as any).descricao || "",
-      capa: (emp as any).capa || (emp as any).capaUrl || undefined,
-      unidades: ((emp as any).unidades || []) as Unidade[],
-    };
-    setEditingEmp(form);
-    setTab("cadastrar");
-  };
-
   return (
     <div className="min-h-screen flex bg-gray-100">
       <Sidebar tab={tab} setTab={setTab} onLogout={() => logout()} userDoc={userDoc!} />
@@ -966,10 +945,24 @@ export default function App() {
           <EmpreendimentosView
             data={empList}
             isAdmin={userDoc?.role === "admin"}
-            onEditRequest={onEditRequest}
             onDelete={async (id) => {
               try { await deleteEmpreendimento(id); }
               catch (e: any) { alert(e?.message || "Erro ao excluir"); }
+            }}
+            onEditRequest={(emp) => {
+              // Mapeia Emp -> EmpreendimentoForm para edição (traz também unidades/capa se existirem)
+              const f: EmpreendimentoForm = {
+                id: emp.id,
+                nome: emp.nome,
+                endereco: emp.endereco || "",
+                lat: (emp as any).lat,
+                lng: (emp as any).lng,
+                descricao: (emp as any).descricao,
+                capa: (emp as any).capa, // quando em modo teste
+                unidades: (emp as any).unidades || [],
+              };
+              setEditingEmp(f);
+              setTab("cadastrar");
             }}
           />
         )}
