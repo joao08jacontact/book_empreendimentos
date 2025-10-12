@@ -247,7 +247,7 @@ const EmpreendimentosView: React.FC<{
             <div key={e.id} className="bg-white rounded-2xl shadow p-4">
               <div className="aspect-video rounded-xl bg-gray-200 overflow-hidden mb-3">
                 {e.capaUrl ? (
-                  <img src={e.capaUrl} className="w-full h-full object-cover" />
+                  <img src={(e as any).capa || e.capaUrl} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-gray-500">
                     Sem capa
