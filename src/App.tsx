@@ -246,18 +246,22 @@ const EmpreendimentosView: React.FC<{
           {data.map((e) => (
             <div key={e.id} className="bg-white rounded-2xl shadow p-4">
               <div className="aspect-video rounded-xl bg-gray-200 overflow-hidden mb-3">
-                {e.capaUrl ? (
-                  <img src={(e as any).capa || e.capaUrl} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-gray-500">
-                    Sem capa
-                  </div>
-                )}
+                {(() => {
+                  const cover = (e as any).capaUrl || (e as any).capa || (e as any).cover || (e as any).imagemCapa ||
+                    (Array.isArray((e as any).fotos) ? ((e as any).fotos[0]?.url ?? (e as any).fotos[0]) : undefined);
+                  return cover ? (
+                    <img src={String(cover)} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-gray-500">
+                      Sem capa
+                    </div>
+                  );
+                })()}
               </div>
               <div className="font-semibold text-lg">{e.nome}</div>
               <div className="text-sm text-gray-500">{e.endereco}</div>
               <div className="text-xs text-gray-400 mt-1">
-                {(e as any)?.unidades?.length ? `${(e as any).unidades.length} unidade(s)` : `${e.fotos?.length || 0} fotos`}
+                {(e as any)?.unidades?.length ? `${(e as any).unidades.length} unidade(s)` : `${(Array.isArray((e as any).fotos) ? (e as any).fotos.length : 0)} fotos`}
               </div>
               <div className="mt-3 flex items-center gap-4">
                 <button onClick={() => setSelected(e)} className="text-blue-600 text-sm">
@@ -291,16 +295,18 @@ const EmpreendimentosView: React.FC<{
             ← Voltar
           </button>
 
-          <div className="grid md:grid-cols-[1fr_2fr] gap-8 items-start">
+          <div className="grid md:grid-cols-2 gap-8 items-start">
             <div>
               <div className="rounded-xl overflow-hidden bg-gray-200 aspect-video mb-3">
-                {(selected as any).capa ? (
-                  <img src={(selected as any).capa} className="w-full h-full object-cover" />
-                ) : selected.capaUrl ? (
-                  <img src={selected.capaUrl} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-gray-500">Sem capa</div>
-                )}
+                {(() => {
+                  const cover = (selected as any).capa || (selected as any).capaUrl || (Array.isArray((selected as any).fotos) ? ((selected as any).fotos[0]?.url ?? (selected as any).fotos[0]) : undefined);
+                  return cover ? (
+                    <img src={String(cover)} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-gray-500">Sem capa</div>
+                  );
+                })()}
+              </div>
               </div>
               {/* A ficha técnica NÃO aparece mais aqui (é por unidade, mostrada ao abrir fotos) */}
             </div>
