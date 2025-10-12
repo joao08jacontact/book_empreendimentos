@@ -1,5 +1,16 @@
-// src/App.tsx
+// src/App.tsx — Modo teste + Mapa real (React-Leaflet)
+// - Usa <MapaLeaflet /> (OpenStreetMap)
+// - Uploads simulados (dataURL) — sem Firebase Storage
+// - Ficha técnica completa por UNIDADE no cadastro
+// - Painel de Empreendimentos com hierarquia (Empreendimento → Unidades)
+// - Tela Usuários com “Adicionar (Firestore)”
+// - <Account /> importado
+// ----------------------------------------------------------------------
+
 import React, { useEffect, useMemo, useState } from "react";
+import Account from "./components/Account";
+import MapaLeaflet from "./components/MapaLeaflet";
+
 import {
   auth,
   login,
@@ -7,18 +18,62 @@ import {
   listenAuth,
   getUserDoc,
   ensureUserDoc,
-  markMustChange,
-  forceChangePassword,
   AppUserDoc,
-  AppRole,
   Emp,
   Foto,
   listenEmpreendimentos,
-  addEmpreendimento,
   deleteEmpreendimento,
-  uploadCapaFromDataURL,
-  uploadFotoFromDataURL,
 } from "./lib/firebase";
+
+import {
+  getFirestore,
+  collection,
+  onSnapshot,
+  orderBy,
+  query,
+  doc as docRef,
+  updateDoc,
+  addDoc,
+} from "firebase/firestore";
+
+
+function verFotosUnidade(u: any) {
+  const safe = (v: any) => (v ?? '-') ;
+  const ficha = `
+    <div style="padding:16px 16px 8px 16px;background:#fff;border-radius:12px;margin:12px;box-shadow:0 2px 10px rgba(0,0,0,.06);font-family:ui-sans-serif,system-ui">
+      <div style="font-weight:600;margin-bottom:8px;font-size:16px">Ficha técnica — ${safe(u.titulo)}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;font-size:14px">
+        <div><b>Unidade:</b> ${safe(u.titulo)}</div>
+        <div><b>Nº Unidade:</b> ${safe(u.n_unidade)}</div>
+        <div><b>Área M² Privativa:</b> ${safe(u.area_privativa_m2)}</div>
+        <div><b>Área M² Comum:</b> ${safe(u.area_comum_m2)}</div>
+        <div><b>Área M² Aberta:</b> ${safe(u.area_aberta_m2)}</div>
+        <div><b>Total M²:</b> ${safe(u.total_m2)}</div>
+        <div><b>Área Interna (R$):</b> ${safe(u.area_interna_rs)}</div>
+        <div><b>Área Externa (R$):</b> ${safe(u.area_externa_rs)}</div>
+        <div><b>Total (R$):</b> ${safe(u.total_rs)}</div>
+        <div><b>Entrada (R$):</b> ${safe(u.entrada_rs)}</div>
+        <div><b>Reforço (R$):</b> ${safe(u.reforco_rs)}</div>
+        <div><b>Parcelas (R$):</b> ${safe(u.parcelas_rs)}</div>
+        <div><b>Entrega das Chaves (R$):</b> ${safe(u.entrega_chaves_rs)}</div>
+      </div>
+    </div>`;
+
+  const imgs = (u.fotos || []).map((f: string) => 
+    `<img src="${f}" onclick="(function(el){if(el.style.maxWidth){el.style.maxWidth='';el.style.maxHeight='';el.style.boxShadow='';}else{el.style.maxWidth='90vw';el.style.maxHeight='90vh';el.style.boxShadow='0 10px 30px rgba(0,0,0,.4)';}})(this)" 
+      style="width:260px;height:260px;object-fit:cover;margin:10px;border-radius:10px;cursor:pointer;transition:all .2s ease" />`
+  ).join('');
+
+  const html = `
+    <title>Fotos — ${safe(u.titulo)}</title>
+    <div style="padding:12px;background:#f7f7f7;min-height:100vh">
+      ${ficha}
+      <div style="display:flex;flex-wrap:wrap;align-items:flex-start">${imgs}</div>
+    </div>`;
+
+  const w = window.open("", "_blank", "width=1200,height=800");
+  if (w) w.document.write(html);
+}
 
 // ----------------- utils -----------------
 function uid(prefix = "id"): string {
@@ -39,8 +94,8 @@ async function resizeImage(
   {
     maxWidth = 1600,
     maxHeight = 1200,
-    maxKB = 400,
-    quality = 0.85,
+    maxKB = 500,
+    quality = 0.9,
   }: { maxWidth?: number; maxHeight?: number; maxKB?: number; quality?: number } = {}
 ): Promise<string> {
   const dataURL = await fileToDataURL(file);
@@ -48,18 +103,17 @@ async function resizeImage(
   img.src = dataURL;
   await new Promise((res) => (img.onload = () => res(null)));
 
-  let { width, height } = img;
-  const ratio = Math.min(maxWidth / width, maxHeight / height, 1);
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(width * ratio);
-  canvas.height = Math.round(height * ratio);
+  const ratio = Math.min(maxWidth / (img as any).width, maxHeight / (img as any).height, 1);
+  canvas.width = Math.round((img as any).width * ratio);
+  canvas.height = Math.round((img as any).height * ratio);
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
   let out = canvas.toDataURL("image/jpeg", quality);
   const toKB = (b64: string) => Math.round((b64.length * 3) / 4 / 1024);
   let q = quality;
-  while (toKB(out) > maxKB && q > 0.4) {
+  while (toKB(out) > maxKB && q > 0.5) {
     q -= 0.1;
     out = canvas.toDataURL("image/jpeg", q);
   }
@@ -68,6 +122,38 @@ async function resizeImage(
 
 // ----------------- tipos/UI -----------------
 type Tab = "empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario";
+
+// Tudo que será salvo no Firestore quando você estiver no modo “teste” (sem Storage)
+export type Unidade = {
+  id: string;
+  titulo: string;
+  n_unidade?: string;
+  // ficha
+  area_privativa_m2?: number;
+  area_comum_m2?: number;
+  area_aberta_m2?: number;
+  total_m2?: number;
+  area_interna_rs?: number;
+  area_externa_rs?: number;
+  total_rs?: number;
+  entrada_rs?: number;
+  reforco_rs?: number;
+  parcelas_rs?: number;
+  entrega_chaves_rs?: number;
+  // album (DataURLs)
+  fotos: string[];
+};
+
+export type EmpreendimentoForm = {
+  id?: string;
+  nome: string;
+  endereco: string;
+  lat?: number;
+  lng?: number;
+  descricao?: string;
+  capa?: string; // DataURL (modo teste)
+  unidades: Unidade[];
+};
 
 // ----------------- Sidebar -----------------
 const Sidebar: React.FC<{
@@ -79,32 +165,26 @@ const Sidebar: React.FC<{
   const Item = ({ to, label }: { to: Tab; label: string }) => (
     <button
       onClick={() => setTab(to)}
-      className={`w-full text-left p-3 rounded transition hover:bg-gray-100 ${
-        tab === to ? "bg-gray-100" : ""
-      }`}
+      className={`w-full text-left p-3 rounded transition hover:bg-gray-100 ${tab === to ? "bg-gray-100" : ""}`}
     >
       {label}
     </button>
   );
 
   return (
-    <aside className="w-1/3 max-w-md bg-white border-r p-4">
+    <aside className="w-72 bg-white border-r p-4">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-lg font-semibold">Menu</h2>
-        <button onClick={onLogout} className="text-sm text-red-600">
-          Sair
-        </button>
+        <button onClick={onLogout} className="text-sm text-red-600">Sair</button>
       </div>
       <div className="space-y-2">
         <Item to="empreendimentos" label="Empreendimentos" />
         <Item to="mapa" label="Mapa" />
-        {userDoc.role === "admin" && (
-          <>
-            <Item to="cadastrar" label="Cadastrar Empreendimento" />
-            <Item to="usuarios" label="Usuários" />
-          </>
-        )}
-        {userDoc.role === "user" && <Item to="meu_usuario" label="Usuário" />}
+        {userDoc.role === "admin" && (<>
+          <Item to="cadastrar" label="Cadastrar Empreendimento" />
+          <Item to="usuarios" label="Usuários" />
+        </>)}
+        <Item to="meu_usuario" label="Usuário" />
       </div>
       <div className="mt-6 text-sm text-gray-500">
         Logado como <span className="font-medium">{userDoc.name || userDoc.email}</span>
@@ -113,82 +193,91 @@ const Sidebar: React.FC<{
   );
 };
 
-// ----------------- Ficha técnica -----------------
-const FichaTecnica: React.FC<{ emp: Emp & { id: string } }> = ({ emp }) => {
+// ----------------- Ficha técnica (visualização somente) -----------------
+const FichaTecnica: React.FC<{ u: Partial<Unidade> }> = ({ u }) => {
   const Item = ({ label, value }: { label: string; value?: string | number }) => (
-    <div className="flex justify-between text-sm py-1">
-      <span className="text-gray-500">{label}</span>
+    <div className="grid grid-cols-[1fr_auto] gap-3 text-sm">
+      <span className="text-gray-600">{label}</span>
       <span className="font-medium">{value ?? "-"}</span>
     </div>
   );
   return (
     <div className="bg-white rounded-xl shadow p-4">
       <h3 className="font-semibold mb-3">Ficha técnica</h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
-        <Item label="Unidade" value={emp.unidade} />
-        <Item label="Nº Unidade" value={emp.n_unidade} />
-        <Item label="Área M² Privativa" value={emp.area_privativa_m2} />
-        <Item label="Área M² Comum" value={emp.area_comum_m2} />
-        <Item label="Área M² Aberta" value={emp.area_aberta_m2} />
-        <Item label="Total M²" value={emp.total_m2} />
-        <Item label="Área Interna (R$)" value={emp.area_interna_rs} />
-        <Item label="Área Externa (R$)" value={emp.area_externa_rs} />
-        <Item label="Total (R$)" value={emp.total_rs} />
-        <Item label="Entrada (R$)" value={emp.entrada_rs} />
-        <Item label="Reforço (R$)" value={emp.reforco_rs} />
-        <Item label="Parcelas (R$)" value={emp.parcelas_rs} />
-        <Item label="Entrega das Chaves (R$)" value={emp.entrega_chaves_rs} />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-2">
+        <Item label="Unidade" value={u.titulo} />
+        <Item label="Nº Unidade" value={u.n_unidade} />
+        <Item label="Área M² Privativa" value={u.area_privativa_m2} />
+        <Item label="Área M² Comum" value={u.area_comum_m2} />
+        <Item label="Área M² Aberta" value={u.area_aberta_m2} />
+        <Item label="Total M²" value={u.total_m2} />
+        <Item label="Área Interna (R$)" value={u.area_interna_rs} />
+        <Item label="Área Externa (R$)" value={u.area_externa_rs} />
+        <Item label="Total (R$)" value={u.total_rs} />
+        <Item label="Entrada (R$)" value={u.entrada_rs} />
+        <Item label="Reforço (R$)" value={u.reforco_rs} />
+        <Item label="Parcelas (R$)" value={u.parcelas_rs} />
+        <Item label="Entrega das Chaves (R$)" value={u.entrega_chaves_rs} />
       </div>
     </div>
   );
 };
 
-// ----------------- Lista/Álbum -----------------
+// ----------------- Lista/Álbum/HIERARQUIA -----------------
 const EmpreendimentosView: React.FC<{
   data: (Emp & { id: string })[];
   isAdmin: boolean;
   onDelete: (id: string) => void;
-}> = ({ data, isAdmin, onDelete }) => {
+  onEditRequest: (emp: Emp & { id: string }) => void;
+}> = ({ data, isAdmin, onDelete, onEditRequest }) => {
   const [selected, setSelected] = useState<(Emp & { id: string }) | null>(null);
+  const selectedUnidades: Unidade[] = useMemo(() => {
+    if (!selected) return [];
+    // Emp do Firestore pode não declarar, então tratamos como any
+    return (selected as any).unidades ?? [];
+  }, [selected]);
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Empreendimentos</h1>
+      {!selected && <h1 className="text-3xl font-semibold">Empreendimentos</h1>}
 
       {!selected && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {data.map((e) => (
-            <div key={e.id} className="bg-white rounded-xl shadow p-4">
-              <div className="aspect-video rounded-lg bg-gray-200 overflow-hidden mb-3">
-                {((e as any).capa || e.capaUrl) ? (
-                  <img src={e.capaUrl} className="w-full h-full object-cover" />
+            <div key={e.id} className="bg-white rounded-2xl shadow p-4">
+              <div className="aspect-video rounded-xl bg-gray-200 overflow-hidden mb-3">
+                {(e as any).capa || e.capaUrl ? (
+                  <img src={(e as any).capa ?? e.capaUrl} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-gray-500">
                     Sem capa
                   </div>
                 )}
               </div>
-              <div className="font-medium">{e.nome}</div>
+              <div className="font-semibold text-lg">{e.nome}</div>
               <div className="text-sm text-gray-500">{e.endereco}</div>
               <div className="text-xs text-gray-400 mt-1">
-                {e.fotos?.length || 0} fotos
+                {(e as any)?.unidades?.length ? `${(e as any).unidades.length} unidade(s)` : `${e.fotos?.length || 0} fotos`}
               </div>
-              <div className="mt-3 flex items-center gap-3">
-                <button
-                  onClick={() => setSelected(e)}
-                  className="text-blue-600 text-sm"
-                >
+              <div className="mt-3 flex items-center gap-4">
+                <button onClick={() => setSelected(e)} className="text-blue-600 text-sm">
                   Abrir álbum
                 </button>
                 {isAdmin && (
-                  <button
-                    onClick={() => {
-                      if (confirm("Excluir este empreendimento?")) onDelete(e.id!);
-                    }}
-                    className="text-red-600 text-sm"
-                  >
-                    Excluir
-                  </button>
+                  <>
+                    <button
+                      onClick={() => onEditRequest(e)}
+                      className="text-emerald-700 text-sm"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      onClick={() => { if (confirm("Excluir este empreendimento?")) onDelete(e.id!); }}
+                      className="text-red-600 text-sm"
+                    >
+                      Excluir
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -197,36 +286,60 @@ const EmpreendimentosView: React.FC<{
       )}
 
       {selected && (
-        <div className="space-y-4">
+        <div className="space-y-6">
           <button onClick={() => setSelected(null)} className="text-sm text-blue-600">
             ← Voltar
           </button>
-          <div className="flex flex-col md:flex-row gap-6 items-start">
-            <div className="md:w-1/3 w-full">
-              <div className="rounded-lg overflow-hidden bg-gray-200 aspect-video mb-3">
-                {selected.capaUrl ? (
+
+          <div className="grid md:grid-cols-[1fr_2fr] gap-8 items-start">
+            <div>
+              <div className="rounded-xl overflow-hidden bg-gray-200 aspect-video mb-3">
+                {(selected as any).capa ? (
+                  <img src={(selected as any).capa} className="w-full h-full object-cover" />
+                ) : selected.capaUrl ? (
                   <img src={selected.capaUrl} className="w-full h-full object-cover" />
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center text-gray-500">
-                    Sem capa
-                  </div>
+                  <div className="w-full h-full flex items-center justify-center text-gray-500">Sem capa</div>
                 )}
               </div>
-              <FichaTecnica emp={selected} />
+              {/* A ficha técnica NÃO aparece mais aqui (é por unidade, mostrada ao abrir fotos) */}
             </div>
 
-            <div className="flex-1 w-full">
-              <h2 className="text-xl font-semibold mb-2">{selected.nome}</h2>
-              <p className="text-gray-600 mb-4">{selected.endereco}</p>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                {selected.fotos?.map((f) => (
-                  <figure key={f.id} className="bg-white rounded-lg overflow-hidden shadow">
-                    <img src={f.url} className="w-full h-40 object-cover" />
-                    <figcaption className="text-sm p-2">
-                      {f.descricao || "Sem descrição"}
-                    </figcaption>
-                  </figure>
-                ))}
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-2xl font-semibold">{selected.nome}</h2>
+                <p className="text-gray-600">{selected.endereco}</p>
+              </div>
+
+              {/* Cards de UNIDADES (hierarquia) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+                {selectedUnidades.length === 0 && (
+                  <div className="text-gray-500">Nenhuma unidade cadastrada neste empreendimento.</div>
+                )}
+                {selectedUnidades.map((u) => {
+                  const thumb = u.fotos?.[0];
+                  return (
+                    <div key={u.id} className="bg-white rounded-2xl shadow p-5 w-full">
+                      <div className="aspect-[16/9] rounded-xl overflow-hidden bg-gray-200 mb-3">
+                        {thumb ? (
+                          <img src={thumb} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-gray-500">Sem foto</div>
+                        )}
+                      </div>
+                      <div className="font-medium text-lg">{u.titulo || "Unidade"}</div>
+                      <div className="text-xs text-gray-500">{u.n_unidade ? `Nº ${u.n_unidade}` : "-"}</div>
+                      <div className="mt-3">
+                        <button
+                          className="text-blue-600 text-sm"
+                          onClick={() => verFotosUnidade(u)}
+                        >
+                          Abrir fotos ({u.fotos?.length || 0})
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -236,372 +349,486 @@ const EmpreendimentosView: React.FC<{
   );
 };
 
-// ----------------- Mapa simples (SVG) -----------------
-const MapMock: React.FC<{ data: (Emp & { id: string })[] }> = ({ data }) => {
-  const coords = useMemo(() => {
-    const valid = data.filter((e) => typeof e.lat === "number" && typeof e.lng === "number");
-    if (!valid.length) return [] as { id: string; x: number; y: number; nome: string }[];
-    const lats = valid.map((e) => e.lat!);
-    const lngs = valid.map((e) => e.lng!);
-    const minLat = Math.min(...lats);
-    const maxLat = Math.max(...lats);
-    const minLng = Math.min(...lngs);
-    const maxLng = Math.max(...lngs);
-    const pad = 20;
-    const W = 1000,
-      H = 500;
-    return valid.map((e) => {
-      const x = pad + ((e.lng! - minLng) / Math.max(1e-6, maxLng - minLng)) * (W - 2 * pad);
-      const y = pad + (1 - (e.lat! - minLat) / Math.max(1e-6, maxLat - minLat)) * (H - 2 * pad);
-      return { id: e.id!, x, y, nome: e.nome };
-    });
-  }, [data]);
-
-  return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Mapa de Empreendimentos</h1>
-      <p className="text-gray-600">Preview simplificado (SVG). Depois trocamos por Leaflet.</p>
-      <div className="w-full bg-white rounded-xl shadow p-4">
-        <svg viewBox="0 0 1000 500" className="w-full h-[420px]">
-          <defs>
-            <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor="#eef2ff" />
-              <stop offset="100%" stopColor="#e0f2fe" />
-            </linearGradient>
-          </defs>
-          <rect x="0" y="0" width="1000" height="500" fill="url(#bg)" />
-          {coords.map((c) => (
-            <g key={c.id}>
-              <circle cx={c.x} cy={c.y} r={8} fill="#2563eb" opacity={0.9} />
-              <text x={c.x + 12} y={c.y + 4} className="text-xs" fill="#111827">
-                {c.nome}
-              </text>
-            </g>
-          ))}
-        </svg>
-      </div>
-    </div>
-  );
-};
-
-// ----------------- Cadastrar -----------------
-const NumberInput = ({
+// ----------------- Inputs helpers -----------------
+const LabeledInput = ({
   label,
-  value,
-  setValue,
-  step = 0.01,
+  children,
+  className,
 }: {
   label: string;
-  value: string;
-  setValue: (s: string) => void;
-  step?: number;
+  children: React.ReactNode;
+  className?: string;
 }) => (
-  <div>
-    <label className="text-sm block mb-1">{label}</label>
-    <input
-      type="number"
-      step={step}
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      className="w-full border p-2 rounded"
-    />
+  <div className={className ?? ""}>
+    <label className="block text-sm font-medium mb-1">{label}</label>
+    {children}
   </div>
 );
 
-const CadastrarView: React.FC<{
-  onSave: (emp: Emp) => Promise<void>;
-}> = ({ onSave }) => {
-  const [nome, setNome] = useState("");
-  const [endereco, setEndereco] = useState("");
-  const [lat, setLat] = useState("");
-  const [lng, setLng] = useState("");
-  const [descricao, setDescricao] = useState("");
+// ----------------- CadastrarView (com FICHA por unidade) -----------------
+interface CadastrarViewProps {
+  editing?: EmpreendimentoForm | null;
+  onSaved: () => void;
+  onCancel: () => void;
+}
 
-  const [unidade, setUnidade] = useState("");
-  const [nUnidade, setNUnidade] = useState("");
-  const [areaPriv, setAreaPriv] = useState("");
-  const [areaComum, setAreaComum] = useState("");
-  const [areaAberta, setAreaAberta] = useState("");
-  const [totalM2, setTotalM2] = useState("");
-  const [areaInt, setAreaInt] = useState("");
-  const [areaExt, setAreaExt] = useState("");
-  const [totalRs, setTotalRs] = useState("");
-  const [entrada, setEntrada] = useState("");
-  const [reforco, setReforco] = useState("");
-  const [parcelas, setParcelas] = useState("");
-  const [entrega, setEntrega] = useState("");
+function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
+  const [form, setForm] = React.useState<EmpreendimentoForm>({
+    id: editing?.id,
+    nome: editing?.nome || "",
+    endereco: editing?.endereco || "",
+    lat: editing?.lat,
+    lng: editing?.lng,
+    descricao: editing?.descricao || "",
+    capa: editing?.capa,
+    unidades: editing?.unidades || [],
+  });
 
-  const [capaDataURL, setCapaDataURL] = useState<string>("");
-  const [loadingCapa, setLoadingCapa] = useState(false);
-  const [album, setAlbum] = useState<Foto[]>([]);
-  const [fotoLoading, setFotoLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [unidadeDraft, setUnidadeDraft] = React.useState<Unidade>({
+    id: uid("uni"),
+    titulo: "",
+    n_unidade: "",
+    area_privativa_m2: undefined,
+    area_comum_m2: undefined,
+    area_aberta_m2: undefined,
+    total_m2: undefined,
+    area_interna_rs: undefined,
+    area_externa_rs: undefined,
+    total_rs: undefined,
+    entrada_rs: undefined,
+    reforco_rs: undefined,
+    parcelas_rs: undefined,
+    entrega_chaves_rs: undefined,
+    fotos: [],
+  });
+
+  const onChangeField = (k: keyof EmpreendimentoForm, v: any) =>
+    setForm((prev) => ({ ...prev, [k]: v }));
+
+  const onPickCapa: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const dataUrl = await resizeImage(f);
+    onChangeField("capa", dataUrl);
+  };
+
+  const onPickFotoUnidade: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const dataUrl = await resizeImage(f);
+    setUnidadeDraft((u) => ({ ...u, fotos: [...(u.fotos || []), dataUrl] }));
+    e.currentTarget.value = "";
+  };
+
+  const addUnidade = () => {
+    if (!unidadeDraft.titulo.trim()) return alert("Informe o título da unidade.");
+    setForm((prev) => ({ ...prev, unidades: [...prev.unidades, unidadeDraft] }));
+    setUnidadeDraft({
+      id: uid("uni"),
+      titulo: "",
+      n_unidade: "",
+      area_privativa_m2: undefined,
+      area_comum_m2: undefined,
+      area_aberta_m2: undefined,
+      total_m2: undefined,
+      area_interna_rs: undefined,
+      area_externa_rs: undefined,
+      total_rs: undefined,
+      entrada_rs: undefined,
+      reforco_rs: undefined,
+      parcelas_rs: undefined,
+      entrega_chaves_rs: undefined,
+      fotos: [],
+    });
+  };
+
+  const removeUnidade = (id: string) => {
+    setForm((prev) => ({ ...prev, unidades: prev.unidades.filter((u) => u.id !== id) }));
+  };
+
+  const verFotos = (fotos: string[]) => {
+    const html = fotos
+      .map((f) => `<img src="${f}" style="width:180px;height:180px;object-fit:cover;margin:6px;border-radius:10px;"/>`)
+      .join("");
+    const w = window.open("", "_blank", "width=1000,height=700");
+    if (w) {
+      w.document.write(
+        `<title>Fotos da unidade</title><div style="display:flex;flex-wrap:wrap;padding:16px;background:#f7f7f7">${html}</div>`
+      );
+    }
+  };
+
+  // Firestore (modo teste: apenas salva DataURLs, sem Storage)
+  const salvar = async () => {
+    const payload = { ...form };
+    if (!payload.nome.trim()) {
+      alert("Informe o nome.");
+      return;
+    }
+    try {
+      const { collection, doc, setDoc, updateDoc } = await import("firebase/firestore");
+      const { db } = await import("./lib/firebase");
+      if (payload.id) {
+        const ref = doc(db, "empreendimentos", payload.id);
+        await updateDoc(ref, payload as any);
+      } else {
+        const id = uid("emp");
+        const ref = doc(collection(db, "empreendimentos"), id);
+        payload.id = id;
+        await setDoc(ref, payload as any);
+      }
+      alert("Empreendimento salvo.");
+      onSaved();
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao salvar.");
+    }
+  };
 
   return (
-    <div className="max-w-5xl">
-      <h1 className="text-2xl font-semibold mb-4">Cadastrar Empreendimento</h1>
+    <div className="space-y-6">
+      {/* Cabeçalho */}
+      <h1 className="text-3xl font-semibold">{form.id ? "Editar Empreendimento" : "Cadastrar Empreendimento"}</h1>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <div>
-          <label className="text-sm block mb-1">Nome</label>
-          <input
-            value={nome}
-            onChange={(e) => setNome(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
+      {/* Dados do empreendimento */}
+      <div className="bg-white rounded-2xl shadow p-6 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <LabeledInput label="Nome">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={form.nome}
+              onChange={(e) => onChangeField("nome", e.target.value)}
+            />
+          </LabeledInput>
+          <LabeledInput label="Endereço">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={form.endereco}
+              onChange={(e) => onChangeField("endereco", e.target.value)}
+            />
+          </LabeledInput>
+          <LabeledInput label="Latitude">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={form.lat ?? ""}
+              onChange={(e) => onChangeField("lat", e.target.value ? Number(e.target.value) : undefined)}
+            />
+          </LabeledInput>
+          <LabeledInput label="Longitude">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={form.lng ?? ""}
+              onChange={(e) => onChangeField("lng", e.target.value ? Number(e.target.value) : undefined)}
+            />
+          </LabeledInput>
+          <LabeledInput label="Descrição" className="md:col-span-2">
+            <textarea
+              rows={3}
+              className="w-full border rounded-lg p-2"
+              value={form.descricao}
+              onChange={(e) => onChangeField("descricao", e.target.value)}
+            />
+          </LabeledInput>
         </div>
-        <div>
-          <label className="text-sm block mb-1">Endereço</label>
-          <input
-            value={endereco}
-            onChange={(e) => setEndereco(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
-        </div>
-        <div>
-          <label className="text-sm block mb-1">Latitude</label>
-          <input
-            value={lat}
-            onChange={(e) => setLat(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
-        </div>
-        <div>
-          <label className="text-sm block mb-1">Longitude</label>
-          <input
-            value={lng}
-            onChange={(e) => setLng(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
-        </div>
-        <div className="md:col-span-2">
-          <label className="text-sm block mb-1">Descrição</label>
-          <textarea
-            value={descricao}
-            onChange={(e) => setDescricao(e.target.value)}
-            className="w-full border p-2 rounded"
-          />
+
+        <div className="rounded-xl border p-4">
+          <div className="text-lg font-semibold mb-2">Capa do empreendimento</div>
+          <input type="file" accept="image/*" onChange={onPickCapa} />
+          {form.capa && (
+            <div className="mt-3">
+              <img src={form.capa} className="w-full max-w-3xl rounded-xl object-cover aspect-[16/9]" />
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow p-4 mt-6">
-        <h2 className="font-medium mb-3">Ficha técnica</h2>
-        <div className="grid gap-3 md:grid-cols-3">
-          <div>
-            <label className="text-sm block mb-1">Unidade</label>
+      {/* UNIDADE */}
+      <div className="bg-white rounded-2xl shadow p-6 space-y-4">
+        <div className="text-xl font-semibold">Unidade — Ficha técnica</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <LabeledInput label="Título">
             <input
-              value={unidade}
-              onChange={(e) => setUnidade(e.target.value)}
-              className="w-full border p-2 rounded"
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.titulo}
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, titulo: e.target.value }))}
             />
-          </div>
-          <div>
-            <label className="text-sm block mb-1">Nº Unidade</label>
+          </LabeledInput>
+          <LabeledInput label="Nº Unidade">
             <input
-              value={nUnidade}
-              onChange={(e) => setNUnidade(e.target.value)}
-              className="w-full border p-2 rounded"
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.n_unidade ?? ""}
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, n_unidade: e.target.value }))}
             />
-          </div>
-          <NumberInput label="Área M² Privativa" value={areaPriv} setValue={setAreaPriv} />
-          <NumberInput label="Área M² Comum" value={areaComum} setValue={setAreaComum} />
-          <NumberInput label="Área M² Aberta" value={areaAberta} setValue={setAreaAberta} />
-          <NumberInput label="Total M²" value={totalM2} setValue={setTotalM2} />
-          <NumberInput label="Área Interna (R$)" value={areaInt} setValue={setAreaInt} step={1} />
-          <NumberInput label="Área Externa (R$)" value={areaExt} setValue={setAreaExt} step={1} />
-          <NumberInput label="Total (R$)" value={totalRs} setValue={setTotalRs} step={1} />
-          <NumberInput label="Entrada (R$)" value={entrada} setValue={setEntrada} step={1} />
-          <NumberInput label="Reforço (R$)" value={reforco} setValue={setReforco} step={1} />
-          <NumberInput label="Parcelas (R$)" value={parcelas} setValue={setParcelas} step={1} />
-          <NumberInput
-            label="Entrega das Chaves (R$)"
-            value={entrega}
-            setValue={setEntrega}
-            step={1}
-          />
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow p-4 mt-6">
-        <h2 className="font-medium mb-3">Capa</h2>
-        <div className="flex items-center gap-3">
-          <input
-            type="file"
-            accept="image/*"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              setLoadingCapa(true);
-              try {
-                const dataURL = await resizeImage(file);
-                setCapaDataURL(dataURL);
-              } finally {
-                setLoadingCapa(false);
+          </LabeledInput>
+          <LabeledInput label="Área M² Privativa">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_privativa_m2 ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_privativa_m2: e.target.value ? Number(e.target.value) : undefined }))
               }
-            }}
-          />
-          {loadingCapa && <span className="text-sm text-gray-500">Compactando...</span>}
-        </div>
-        {capaDataURL && (
-          <div className="mt-2">
-            <img src={capaDataURL} className="w-full max-w-sm rounded-lg shadow" />
-          </div>
-        )}
-      </div>
+            />
+          </LabeledInput>
 
-      <div className="bg-white rounded-xl shadow p-4 mt-6">
-        <h2 className="font-medium mb-3">Álbum de fotos</h2>
-        <div className="flex items-center gap-2 flex-wrap">
-          <input id="desc" placeholder="Ex.: Sala" className="border p-2 rounded text-sm w-40" />
-          <input id="fileFoto" type="file" accept="image/*" className="border p-2 rounded text-sm" />
+          <LabeledInput label="Área M² Comum">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_comum_m2 ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_comum_m2: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Área M² Aberta">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_aberta_m2 ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_aberta_m2: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Total M²">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.total_m2 ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, total_m2: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+
+          <LabeledInput label="Área Interna (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_interna_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_interna_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Área Externa (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_externa_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, area_externa_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Total (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.total_rs ?? ""}
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, total_rs: e.target.value ? Number(e.target.value) : undefined }))}
+            />
+          </LabeledInput>
+
+          <LabeledInput label="Entrada (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.entrada_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, entrada_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Reforço (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.reforco_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, reforco_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+          <LabeledInput label="Parcelas (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.parcelas_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, parcelas_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+
+          <LabeledInput label="Entrega das Chaves (R$)">
+            <input
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.entrega_chaves_rs ?? ""}
+              onChange={(e) =>
+                setUnidadeDraft((u) => ({ ...u, entrega_chaves_rs: e.target.value ? Number(e.target.value) : undefined }))
+              }
+            />
+          </LabeledInput>
+        </div>
+
+        <div className="mt-2">
+          <div className="text-sm font-medium">Álbum da unidade</div>
+          <input type="file" accept="image/*" onChange={onPickFotoUnidade} />
+          {unidadeDraft.fotos.length > 0 && (
+            <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
+              {unidadeDraft.fotos.map((f, i) => (
+                <img key={i} src={f} className="w-full aspect-[16/9] object-cover rounded-lg" />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-2">
+          <button className="px-4 py-2 bg-black text-white rounded-lg" onClick={addUnidade}>Adicionar unidade</button>
           <button
-            className="px-3 py-2 bg-blue-600 text-white text-sm rounded"
-            onClick={async () => {
-              const desc = (document.getElementById("desc") as HTMLInputElement).value.trim();
-              const file = (document.getElementById("fileFoto") as HTMLInputElement).files?.[0];
-              if (!file) return;
-              setFotoLoading(true);
-              try {
-                const dataURL = await resizeImage(file, { quality: 0.85 });
-                setAlbum((arr) => [...arr, { id: uid("f"), url: dataURL, descricao: desc }]);
-                (document.getElementById("desc") as HTMLInputElement).value = "";
-                (document.getElementById("fileFoto") as HTMLInputElement).value = "";
-              } finally {
-                setFotoLoading(false);
-              }
-            }}
+            className="px-4 py-2 border rounded-lg"
+            onClick={() =>
+              setUnidadeDraft({
+                id: uid("uni"),
+                titulo: "",
+                n_unidade: "",
+                area_privativa_m2: undefined,
+                area_comum_m2: undefined,
+                area_aberta_m2: undefined,
+                total_m2: undefined,
+                area_interna_rs: undefined,
+                area_externa_rs: undefined,
+                total_rs: undefined,
+                entrada_rs: undefined,
+                reforco_rs: undefined,
+                parcelas_rs: undefined,
+                entrega_chaves_rs: undefined,
+                fotos: [],
+              })
+            }
           >
-            Adicionar foto
+            Limpar
           </button>
-          {fotoLoading && <span className="text-sm text-gray-500">Compactando...</span>}
         </div>
+      </div>
 
-        {album.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-            {album.map((f) => (
-              <figure key={f.id} className="bg-white rounded-lg overflow-hidden shadow">
-                <img src={f.url} className="w-full h-32 object-cover" />
-                <figcaption className="text-xs p-2">{f.descricao || "Sem descrição"}</figcaption>
-              </figure>
-            ))}
+      {/* Tabela de unidades */}
+      <div className="bg-white rounded-2xl shadow p-6">
+        <div className="text-lg font-semibold mb-3">Unidades cadastradas</div>
+        {form.unidades.length === 0 ? (
+          <div className="text-sm text-gray-500">Nenhuma unidade adicionada.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left border-b">
+                  <th className="py-2 pr-4">Título</th>
+                  <th className="py-2 pr-4">Nº</th>
+                  <th className="py-2 pr-4">Priv.(m²)</th>
+                  <th className="py-2 pr-4">Comum(m²)</th>
+                  <th className="py-2 pr-4">Aberta(m²)</th>
+                  <th className="py-2 pr-4">Total(m²)</th>
+                  <th className="py-2 pr-4">Fotos</th>
+                  <th className="py-2 pr-4"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {form.unidades.map((u) => (
+                  <tr key={u.id} className="border-b">
+                    <td className="py-2 pr-4">{u.titulo}</td>
+                    <td className="py-2 pr-4">{u.n_unidade ?? "-"}</td>
+                    <td className="py-2 pr-4">{u.area_privativa_m2 ?? "-"}</td>
+                    <td className="py-2 pr-4">{u.area_comum_m2 ?? "-"}</td>
+                    <td className="py-2 pr-4">{u.area_aberta_m2 ?? "-"}</td>
+                    <td className="py-2 pr-4">{u.total_m2 ?? "-"}</td>
+                    <td className="py-2 pr-4">
+                      <button className="text-blue-600" onClick={() => verFotos(u.fotos)}>
+                        {u.fotos.length} foto(s)
+                      </button>
+                    </td>
+                    <td className="py-2 pr-4">
+                      <button className="text-red-600" onClick={() => removeUnidade(u.id)}>
+                        Remover
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
 
-      <button
-        disabled={saving}
-        onClick={async () => {
-          if (!nome) return;
-          setSaving(true);
-          try {
-            // 1) cria doc do empreendimento
-            const tempEmp: Emp = {
-              nome,
-              endereco,
-              lat: lat ? Number(lat) : undefined,
-              lng: lng ? Number(lng) : undefined,
-              descricao,
-              fotos: [],
-              unidade,
-              n_unidade: nUnidade,
-              area_privativa_m2: areaPriv ? Number(areaPriv) : undefined,
-              area_comum_m2: areaComum ? Number(areaComum) : undefined,
-              area_aberta_m2: areaAberta ? Number(areaAberta) : undefined,
-              total_m2: totalM2 ? Number(totalM2) : undefined,
-              area_interna_rs: areaInt ? Number(areaInt) : undefined,
-              area_externa_rs: areaExt ? Number(areaExt) : undefined,
-              total_rs: totalRs ? Number(totalRs) : undefined,
-              entrada_rs: entrada ? Number(entrada) : undefined,
-              reforco_rs: reforco ? Number(reforco) : undefined,
-              parcelas_rs: parcelas ? Number(parcelas) : undefined,
-              entrega_chaves_rs: entrega ? Number(entrega) : undefined,
-            };
-            const newId = await addEmpreendimento(tempEmp);
-
-            // 2) envia capa
-            let capaUrl: string | undefined = undefined;
-            if (capaDataURL) {
-              capaUrl = await uploadCapaFromDataURL(newId, capaDataURL);
-            }
-
-            // 3) envia álbum, obtém URLs
-            const fotosSubidas: Foto[] = [];
-            for (const f of album) {
-              const url = await uploadFotoFromDataURL(newId, f.id, f.url);
-              fotosSubidas.push({ ...f, url });
-            }
-
-            // 4) atualiza doc com capa e fotos
-            await ensureUserDoc(newId, {} as any); // no-op (só para evitar tree-shaking em build)
-            await fetch(`/__/updateEmp?id=${newId}`, { method: "HEAD" }).catch(() => {});
-            // como não temos função HTTP, atualizamos via setDoc merge:
-            // (truque: reutilizamos addDoc acima; aqui fazemos update com fetch no-op para evitar erro em SSR)
-            // Em produção, você pode trocar por updateDoc(doc(db,"empreendimentos",newId), {...})
-
-            // fallback: simples POST via Firestore SDK
-            await (await import("firebase/firestore")).updateDoc(
-              (await import("firebase/firestore")).doc(
-                (await import("firebase/firestore")).getFirestore(),
-                "empreendimentos",
-                newId
-              ),
-              {
-                capaUrl: capaUrl || null,
-                fotos: fotosSubidas,
-              }
-            );
-
-            // reset
-            setNome("");
-            setEndereco("");
-            setLat("");
-            setLng("");
-            setDescricao("");
-            setUnidade("");
-            setNUnidade("");
-            setAreaPriv("");
-            setAreaComum("");
-            setAreaAberta("");
-            setTotalM2("");
-            setAreaInt("");
-            setAreaExt("");
-            setTotalRs("");
-            setEntrada("");
-            setReforco("");
-            setParcelas("");
-            setEntrega("");
-            setCapaDataURL("");
-            setAlbum([]);
-
-            alert("Empreendimento salvo!");
-          } finally {
-            setSaving(false);
-          }
-        }}
-        className="mt-6 px-4 py-2 bg-blue-600 text-white rounded"
-      >
-        {saving ? "Salvando..." : "Salvar Empreendimento"}
-      </button>
+      <div className="flex gap-2">
+        <button className="px-4 py-2 bg-black text-white rounded-lg" onClick={salvar}>
+          Salvar
+        </button>
+        <button className="px-4 py-2 border rounded-lg" onClick={onCancel}>
+          Cancelar
+        </button>
+      </div>
     </div>
   );
-};
+}
 
 // ----------------- Usuários (admin) -----------------
-const UsuariosAdminView: React.FC<{
-  users: { uid: string; data: AppUserDoc }[];
-  refresh: () => void;
-}> = ({ users }) => {
-  // Observação: sem Cloud Functions, a criação deve ser no Console.
-  // Aqui apenas listamos/permitimos marcar "troca obrigatória" e alterar role.
-  const [updating, setUpdating] = useState<string | null>(null);
+const UsuariosAdminView: React.FC = () => {
+  const db = getFirestore();
+  const [list, setList] = useState<{ id: string; data: AppUserDoc }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"admin" | "user">("user");
+  const [mustChange, setMustChange] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const q = query(collection(db, "users"), orderBy("email"));
+    const unsub = onSnapshot(q, (snap) => {
+      const arr: { id: string; data: AppUserDoc }[] = [];
+      snap.forEach((d) => arr.push({ id: d.id, data: d.data() as AppUserDoc }));
+      setList(arr);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [db]);
 
   return (
     <div className="max-w-4xl">
       <h1 className="text-2xl font-semibold mb-4">Usuários</h1>
       <p className="text-sm text-gray-500 mb-4">
-        Para criar / apagar usuários pela UI será preciso adicionar Firebase Cloud Functions.
-        Por ora, crie no Console do Firebase e ajuste o perfil aqui (role e “troca obrigatória”).
+        <b>Adicionar usuário (somente Firestore)</b>: este botão só cria/edita o documento na coleção <code>users</code>.
+        Para permitir login, crie o usuário também em <i>Authentication → Users</i> no Console do Firebase.
       </p>
+
+      <div className="bg-white rounded-xl shadow p-4 mb-6">
+        <h2 className="font-medium mb-3">Adicionar/Atualizar usuário (Firestore)</h2>
+        <div className="grid md:grid-cols-4 gap-3">
+          <input placeholder="Nome" value={name} onChange={(e) => setName(e.target.value)} className="border p-2 rounded" />
+          <input placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} className="border p-2 rounded" />
+          <select value={role} onChange={(e) => setRole(e.target.value as "admin" | "user")} className="border p-2 rounded">
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+          </select>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={mustChange} onChange={(e) => setMustChange(e.target.checked)} />
+            Troca obrigatória?
+          </label>
+        </div>
+        <button
+          disabled={saving}
+          onClick={async () => {
+            if (!email) { alert("Informe ao menos o e-mail."); return; }
+            setSaving(true);
+            try {
+              await addDoc(collection(db, "users"), {
+                name: name || email.split("@")[0],
+                email,
+                role,
+                mustChangePassword: mustChange,
+              });
+              setName(""); setEmail(""); setRole("user"); setMustChange(true);
+            } finally { setSaving(false); }
+          }}
+          className="mt-3 px-3 py-2 bg-blue-600 text-white rounded"
+        >
+          {saving ? "Salvando..." : "Adicionar (Firestore)"}
+        </button>
+      </div>
+
       <div className="bg-white rounded-xl shadow p-4">
         <table className="w-full text-sm">
           <thead>
@@ -613,98 +840,29 @@ const UsuariosAdminView: React.FC<{
             </tr>
           </thead>
           <tbody>
-            {users.map(({ uid, data }) => (
-              <tr key={uid} className="border-t">
+            {loading && <tr><td className="py-3" colSpan={4}>Carregando...</td></tr>}
+            {!loading && list.map(({ id, data }) => (
+              <tr key={id} className="border-t">
                 <td className="py-2">{data.name}</td>
                 <td className="py-2">{data.email}</td>
                 <td className="py-2">{data.role}</td>
                 <td className="py-2">
-                  {data.mustChangePassword ? "Sim" : "Não"}
-                  {"  "}
+                  {data.mustChangePassword ? "Sim" : "Não"}{" "}
                   <button
-                    disabled={updating === uid}
                     onClick={async () => {
-                      setUpdating(uid);
-                      try {
-                        await markMustChange(uid, !data.mustChangePassword);
-                        alert("Atualizado.");
-                      } finally {
-                        setUpdating(null);
-                      }
+                      await updateDoc(docRef(getFirestore(), "users", id), {
+                        mustChangePassword: !data.mustChangePassword,
+                      });
                     }}
                     className="ml-3 text-blue-600"
                   >
-                    {updating === uid ? "..." : "Alternar"}
+                    Alternar
                   </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
-    </div>
-  );
-};
-
-// ----------------- Meu Usuário (corretor) -----------------
-const MeuUsuarioView: React.FC<{
-  me: AppUserDoc;
-}> = ({ me }) => {
-  const [pwd1, setPwd1] = useState("");
-  const [pwd2, setPwd2] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  return (
-    <div className="max-w-md">
-      <h1 className="text-2xl font-semibold mb-4">Minha conta</h1>
-      <div className="bg-white rounded-xl shadow p-4">
-        <div className="mb-4">
-          <div className="text-sm text-gray-500">Nome</div>
-          <div className="font-medium">{me.name}</div>
-        </div>
-        <div className="mb-6">
-          <div className="text-sm text-gray-500">E-mail</div>
-          <div className="font-medium">{me.email}</div>
-        </div>
-
-        <h2 className="font-medium mb-2">Alterar senha</h2>
-        <input
-          type="password"
-          placeholder="Nova senha"
-          value={pwd1}
-          onChange={(e) => setPwd1(e.target.value)}
-          className="border p-2 rounded w-full mb-2"
-        />
-        <input
-          type="password"
-          placeholder="Confirmar senha"
-          value={pwd2}
-          onChange={(e) => setPwd2(e.target.value)}
-          className="border p-2 rounded w-full mb-4"
-        />
-        <button
-          disabled={saving}
-          onClick={async () => {
-            if (!pwd1 || pwd1 !== pwd2) {
-              alert("As senhas não conferem.");
-              return;
-            }
-            setSaving(true);
-            try {
-              await forceChangePassword(pwd1);
-              // limpa flag de troca obrigatória no meu doc
-              if (auth.currentUser) await markMustChange(auth.currentUser.uid, false);
-              alert("Senha alterada!");
-              setPwd1("");
-              setPwd2("");
-            } finally {
-              setSaving(false);
-            }
-          }}
-          className="px-4 py-2 rounded bg-black text-white"
-        >
-          {saving ? "Salvando..." : "Salvar nova senha"}
-        </button>
       </div>
     </div>
   );
@@ -722,13 +880,9 @@ const Login: React.FC = () => {
         onSubmit={async (e) => {
           e.preventDefault();
           setLoading(true);
-          try {
-            await login(email, password);
-          } catch (e: any) {
-            alert(e?.message || "Erro ao entrar");
-          } finally {
-            setLoading(false);
-          }
+          try { await login(email, password); }
+          catch (e: any) { alert(e?.message || "Erro ao entrar"); }
+          finally { setLoading(false); }
         }}
         className="bg-white p-8 rounded-2xl w-full max-w-sm shadow-xl border border-gray-200"
       >
@@ -736,22 +890,10 @@ const Login: React.FC = () => {
           <h1 className="text-2xl font-bold">Kolling | Book de Empreendimentos</h1>
         </div>
         <label className="block text-sm mb-1">E-mail</label>
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full mb-4 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]"
-        />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} className="w-full mb-4 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
         <label className="block text-sm mb-1">Senha</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full mb-6 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]"
-        />
-        <button
-          disabled={loading}
-          className="w-full py-2 rounded bg-black text-white hover:opacity-90 disabled:opacity-60"
-        >
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full mb-6 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
+        <button disabled={loading} className="w-full py-2 rounded bg-black text-white hover:opacity-90 disabled:opacity-60">
           {loading ? "Entrando..." : "Entrar"}
         </button>
       </form>
@@ -769,88 +911,73 @@ export default function App() {
   const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
   const [empList, setEmpList] = useState<(Emp & { id: string })[]>([]);
   const [tab, setTab] = useState<Tab>("empreendimentos");
+  const [editingEmp, setEditingEmp] = useState<EmpreendimentoForm | null>(null);
 
   useEffect(() => {
     const unsub = listenAuth(async (u) => {
-      if (!u) {
-        setUserDoc(null);
-        setFirebaseReady(true);
-        return;
-      }
-      // Busca/garante doc do usuário
+      if (!u) { setUserDoc(null); setFirebaseReady(true); return; }
       let doc = await getUserDoc(u.uid);
       if (!doc) {
-        // fallback: se não existir, cria básico
-        doc = {
-          name: u.email?.split("@")[0] || "Usuário",
-          email: u.email || "",
-          role: "user",
-          mustChangePassword: true,
-        };
+        doc = { name: u.email?.split("@")[0] || "Usuário", email: u.email || "", role: "user", mustChangePassword: false };
         await ensureUserDoc(u.uid, doc);
       }
-      setUserDoc(doc);
-      setFirebaseReady(true);
+      setUserDoc(doc); setFirebaseReady(true);
     });
     return () => unsub();
   }, []);
 
   useEffect(() => {
-    // Sync empreendimentos
     const unsub = listenEmpreendimentos((list) => setEmpList(list));
     return () => unsub();
   }, []);
 
   if (!firebaseReady) return null;
-
   if (!auth.currentUser) return <Login />;
-
-  // se precisa trocar senha, força a tela "meu_usuario"
-  const mustChange = userDoc?.mustChangePassword;
-  const effectiveTab: Tab =
-    mustChange && userDoc?.role === "user" ? "meu_usuario" : tab;
 
   return (
     <div className="min-h-screen flex bg-gray-100">
-      <Sidebar
-        tab={effectiveTab}
-        setTab={setTab}
-        onLogout={() => logout()}
-        userDoc={userDoc!}
-      />
+      <Sidebar tab={tab} setTab={setTab} onLogout={() => logout()} userDoc={userDoc!} />
 
       <main className="flex-1 p-6">
-        {effectiveTab === "empreendimentos" && (
+        {tab === "empreendimentos" && (
           <EmpreendimentosView
             data={empList}
             isAdmin={userDoc?.role === "admin"}
             onDelete={async (id) => {
-              try {
-                await deleteEmpreendimento(id);
-              } catch (e: any) {
-                alert(e?.message || "Erro ao excluir");
-              }
+              try { await deleteEmpreendimento(id); }
+              catch (e: any) { alert(e?.message || "Erro ao excluir"); }
+            }}
+            onEditRequest={(emp) => {
+              // Mapeia Emp -> EmpreendimentoForm para edição (traz também unidades/capa se existirem)
+              const f: EmpreendimentoForm = {
+                id: emp.id,
+                nome: emp.nome,
+                endereco: emp.endereco || "",
+                lat: (emp as any).lat,
+                lng: (emp as any).lng,
+                descricao: (emp as any).descricao,
+                capa: (emp as any).capa, // quando em modo teste
+                unidades: (emp as any).unidades || [],
+              };
+              setEditingEmp(f);
+              setTab("cadastrar");
             }}
           />
         )}
 
-        {effectiveTab === "mapa" && <MapMock data={empList} />}
+        {tab === "mapa" && <MapaLeaflet empreendimentos={empList as any} />}
 
-        {effectiveTab === "cadastrar" && userDoc?.role === "admin" && (
+        {tab === "cadastrar" && userDoc?.role === "admin" && (
           <CadastrarView
-            onSave={async (emp) => {
-              await addEmpreendimento(emp);
-            }}
+            editing={editingEmp}
+            onSaved={() => { setEditingEmp(null); setTab("empreendimentos"); }}
+            onCancel={() => { setEditingEmp(null); setTab("empreendimentos"); }}
           />
         )}
 
-        {effectiveTab === "usuarios" && userDoc?.role === "admin" && (
-          <UsuariosAdminView users={[]} refresh={() => {}} />
-        )}
+        {tab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
 
-        {effectiveTab === "meu_usuario" && userDoc && (
-          <MeuUsuarioView me={userDoc} />
-        )}
+        {tab === "meu_usuario" && <Account />}
       </main>
     </div>
   );
