@@ -142,6 +142,10 @@ export type Unidade = {
   entrega_chaves_rs?: number;
   // album (DataURLs)
   fotos: string[];
+
+  // ERP integration (opcional)
+  erp_rowname?: string;
+  status_vendas?: 'Disponivel' | 'Reservado' | 'Vendido';
 };
 
 export type EmpreendimentoForm = {
@@ -400,7 +404,10 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     parcelas_rs: undefined,
     entrega_chaves_rs: undefined,
     fotos: [],
-  });
+  
+    erp_rowname: undefined,
+    status_vendas: undefined,
+});
 
   const onChangeField = (k: keyof EmpreendimentoForm, v: any) =>
     setForm((prev) => ({ ...prev, [k]: v }));
@@ -981,4 +988,77 @@ export default function App() {
       </main>
     </div>
   );
+
+// ===== ERP (Frappe) integration helpers =====
+const ERP_BASE = import.meta.env.VITE_ERP_BASE_URL as string | undefined;
+const ERP_TOKEN_KEY = import.meta.env.VITE_ERP_TOKEN_KEY as string | undefined;
+const ERP_TOKEN_SECRET = import.meta.env.VITE_ERP_TOKEN_SECRET as string | undefined;
+
+function erpAuthHeader() {
+  if (ERP_TOKEN_KEY && ERP_TOKEN_SECRET) {
+    return { Authorization: `token ${ERP_TOKEN_KEY}:${ERP_TOKEN_SECRET}` };
+  }
+  return {};
+}
+
+async function erpGetUnidadeByRowname(rowname: string) {
+  if (!ERP_BASE) throw new Error('VITE_ERP_BASE_URL não configurada');
+  const url = `${ERP_BASE}/api/method/custom.get_unidade_by_rowname?rowname=${encodeURIComponent(rowname)}`;
+  const res = await fetch(url, { headers: { ...erpAuthHeader() }, credentials: 'omit' });
+  const json = await res.json();
+  if (!res.ok || !json?.message) throw new Error(json?.exception || 'Falha ao buscar no ERP');
+  return json.message as any;
+}
+
+async function erpToggleReserva(rowname: string, reservado: 0|1) {
+  if (!ERP_BASE) throw new Error('VITE_ERP_BASE_URL não configurada');
+  const url = `${ERP_BASE}/api/method/custom.set_reserva_db`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...erpAuthHeader() },
+    credentials: 'omit',
+    body: JSON.stringify({ rowname, reservado }),
+  });
+  const json = await res.json();
+  if (!res.ok || !json?.message) throw new Error(json?.exception || 'Falha ao reservar no ERP');
+  return json.message as any;
+}
+// ===== end ERP helpers =====
+
+  {/* ERP: ID Único + Importar */}
+  <div className="flex items-end gap-2 mb-3">
+    <LabeledInput label="ID Único (ERP)" placeholder="ex.: 2kl9m791cj"
+      value={unidadeDraft.erp_rowname || ""} onChange={e=>setUnidadeDraft({...unidadeDraft, erp_rowname:e.target.value})}/>
+    <button
+      className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+      onClick={async()=>{ 
+        if(!unidadeDraft.erp_rowname){ alert('Informe o ID Único (ERP)'); return; }
+        try{
+          const data = await erpGetUnidadeByRowname(unidadeDraft.erp_rowname);
+          setUnidadeDraft({
+            ...unidadeDraft,
+            titulo: data.unidade || unidadeDraft.titulo,
+            n_unidade: data.n_unidade || unidadeDraft.n_unidade,
+            area_privativa_m2: data.area_priv || unidadeDraft.area_privativa_m2,
+            area_comum_m2: data.area_comum || unidadeDraft.area_comum_m2,
+            area_aberta_m2: data.area_aberta || unidadeDraft.area_aberta_m2,
+            total_m2: data.total_m2 || unidadeDraft.total_m2,
+            area_interna_rs: data.preco_interno || unidadeDraft.area_interna_rs,
+            area_externa_rs: data.preco_externo || unidadeDraft.area_externa_rs,
+            total_rs: data.total_rs || unidadeDraft.total_rs,
+            entrada_rs: data.entrada_rs || unidadeDraft.entrada_rs,
+            reforco_rs: data.reforco_rs || unidadeDraft.reforco_rs,
+            parcelas_rs: data.parcelas_rs || unidadeDraft.parcelas_rs,
+            entrega_chaves_rs: data.entrega_rs || unidadeDraft.entrega_chaves_rs,
+            status_vendas: data.status_vendas || unidadeDraft.status_vendas,
+          });
+          alert('Dados importados do ERP com sucesso.');
+        }catch(err:any){
+          alert('Falha ao importar do ERP: '+ (err?.message||err));
+        }
+      }}
+    >
+      Importar do ERP
+    </button>
+  </div>
 }
