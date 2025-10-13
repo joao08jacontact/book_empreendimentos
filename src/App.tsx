@@ -36,6 +36,58 @@ import {
   addDoc,
 } from "firebase/firestore";
 
+// ==== ERP helpers (seguro p/ TypeScript) ====
+const ERP_BASE: string = (import.meta.env.VITE_ERP_BASE_URL || '').replace(/\/$/, '');
+const ERP_TOKEN_KEY: string | undefined = import.meta.env.VITE_ERP_TOKEN_KEY;
+const ERP_TOKEN_SECRET: string | undefined = import.meta.env.VITE_ERP_TOKEN_SECRET;
+const ERP_AUTH_HEADER: string | null =
+  ERP_TOKEN_KEY && ERP_TOKEN_SECRET ? `token ${ERP_TOKEN_KEY}:${ERP_TOKEN_SECRET}` : null;
+
+/** headers de forma segura para o TS */
+function erpHeaders(extra?: Record<string, string>): HeadersInit {
+  const base: Record<string, string> = {};
+  if (ERP_AUTH_HEADER) base['Authorization'] = ERP_AUTH_HEADER;
+  if (extra) Object.assign(base, extra);
+  return base;
+}
+
+/** GET unidade por rowname */
+async function erpGetUnidadeByRowname(rowname: string) {
+  if (!ERP_BASE) throw new Error('VITE_ERP_BASE_URL ausente');
+  const url = `${ERP_BASE}/api/method/custom.get_unidade_by_rowname?rowname=${encodeURIComponent(
+    rowname.trim()
+  )}`;
+  const res = await fetch(url, {
+    headers: erpHeaders(),
+    credentials: ERP_AUTH_HEADER ? 'omit' : 'include',
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    const msg = (json && (json.message || json.exc || json._server_messages)) || 'Falha ERP';
+    throw new Error(typeof msg === 'string' ? msg : 'Falha ERP');
+  }
+  return json?.message || json;
+}
+
+/** POST reservar/desfazer no ERP */
+async function erpToggleReserva(rowname: string, reservar: boolean) {
+  if (!ERP_BASE) throw new Error('VITE_ERP_BASE_URL ausente');
+  const url = `${ERP_BASE}/api/method/custom.set_reserva_db`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: erpHeaders({ 'Content-Type': 'application/json' }),
+    credentials: ERP_AUTH_HEADER ? 'omit' : 'include',
+    body: JSON.stringify({ rowname, reservado: reservar ? 1 : 0 }),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    const msg = (json && (json.message || json.exc || json._server_messages)) || 'Falha ERP';
+    throw new Error(typeof msg === 'string' ? msg : 'Falha ERP');
+  }
+  return json?.message || json;
+}
+// ==== /ERP helpers ====
+
 
 function verFotosUnidade(u: any) {
   const safe = (v: any) => (v ?? '-') ;
@@ -322,6 +374,7 @@ const EmpreendimentosView: React.FC<{
                 )}
                 {selectedUnidades.map((u) => {
                   const thumb = u.fotos?.[0];
+                  const status = u.status_vendas || 'Disponivel';
                   return (
                     <div key={u.id} className="bg-white rounded-2xl shadow p-5 w-full">
                       <div className="aspect-[16/9] rounded-xl overflow-hidden bg-gray-200 mb-3">
@@ -333,6 +386,50 @@ const EmpreendimentosView: React.FC<{
                       </div>
                       <div className="font-medium text-lg">{u.titulo || "Unidade"}</div>
                       <div className="text-xs text-gray-500">{u.n_unidade ? `Nº ${u.n_unidade}` : "-"}</div>
+
+                      <div className="mt-2 flex items-center gap-2">
+                        <span
+                          className={
+                            "inline-block text-xs px-2 py-1 rounded " +
+                            (status === "Reservado"
+                              ? "bg-yellow-100 text-yellow-800"
+                              : status === "Vendido"
+                              ? "bg-green-100 text-green-800"
+                              : "bg-gray-100 text-gray-800")
+                          }
+                        >
+                          {status}
+                        </span>
+                        {/* Botão (somente visual/local). Para efeito total, sincronize Firestore depois. */}
+                        <button
+                          type="button"
+                          className={
+                            "px-3 py-1 rounded text-white " +
+                            (status === "Reservado" ? "bg-slate-600" : "bg-blue-600")
+                          }
+                          onClick={async () => {
+                            if (!u.erp_rowname) {
+                              alert("Informe/importe o ID único (ERP) para reservar");
+                              return;
+                            }
+                            const reservar = status !== "Reservado";
+                            try {
+                              await erpToggleReserva(u.erp_rowname, reservar);
+                              // Atualiza localmente
+                              (u as any).status_vendas = reservar ? "Reservado" : "Disponivel";
+                              // força re-render
+                              setSelected((prev) => (prev ? { ...prev } as any : prev));
+                            } catch (e: any) {
+                              alert(e?.message || "Falha ao alternar reserva");
+                            }
+                          }}
+                          disabled={!u.erp_rowname}
+                          title={!u.erp_rowname ? "Informe/importe o ID único (ERP) para reservar" : ""}
+                        >
+                          {status === "Reservado" ? "Desfazer" : "Reservar"}
+                        </button>
+                      </div>
+
                       <div className="mt-3">
                         <button
                           className="text-blue-600 text-sm"
@@ -407,7 +504,62 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
   
     erp_rowname: undefined,
     status_vendas: undefined,
-});
+  });
+
+  // Estados pedidos para integração ERP
+  const [erpRowId, setErpRowId] = React.useState<string>("");
+  const [erpImportLoading, setErpImportLoading] = React.useState<boolean>(false);
+
+  // ==== Ações ERP dentro do componente ====
+  // Importar campos do ERP para o formulário atual (unidadeDraft)
+  async function handleImportFromERP() {
+    if (!erpRowId.trim()) return;
+    setErpImportLoading(true);
+    try {
+      const m = await erpGetUnidadeByRowname(erpRowId);
+      setUnidadeDraft((prev) => ({
+        ...prev,
+        erp_rowname: erpRowId.trim(),
+        status_vendas: (m.status_vendas as any) ?? prev.status_vendas,
+        titulo: m.unidade ?? prev.titulo,
+        n_unidade: m.n_unidade ?? prev.n_unidade,
+        area_privativa_m2: m.area_priv ?? prev.area_privativa_m2,
+        area_comum_m2: m.area_comum ?? prev.area_comum_m2,
+        area_aberta_m2: m.area_aberta ?? prev.area_aberta_m2,
+        total_m2: m.total_m2 ?? prev.total_m2,
+        area_interna_rs: m.preco_interno ?? prev.area_interna_rs,
+        area_externa_rs: m.preco_externo ?? prev.area_externa_rs,
+        total_rs: m.total_rs ?? prev.total_rs,
+        entrada_rs: m.entrada_rs ?? prev.entrada_rs,
+        reforco_rs: m.reforco_rs ?? prev.reforco_rs,
+        parcelas_rs: m.parcelas_rs ?? prev.parcelas_rs,
+        entrega_chaves_rs: m.entrega_rs ?? prev.entrega_chaves_rs,
+      }));
+    } catch (e: any) {
+      alert(e?.message || "Falha ao importar do ERP");
+    } finally {
+      setErpImportLoading(false);
+    }
+  }
+
+  // Alternar reserva no ERP a partir do rowname salvo na unidade atual
+  async function handleToggleReservaAtual(rowname?: string, estadoAtual?: 'Disponivel' | 'Reservado' | 'Vendido') {
+    if (!rowname) {
+      alert("ID único (ERP) vazio nesta unidade.");
+      return;
+    }
+    const reservar = estadoAtual !== "Reservado";
+    try {
+      await erpToggleReserva(rowname, reservar);
+      setUnidadeDraft((prev) => ({
+        ...prev,
+        status_vendas: reservar ? "Reservado" : "Disponivel",
+      }));
+    } catch (e: any) {
+      alert(e?.message || "Falha ao alternar reserva");
+    }
+  }
+  // ==== /Ações ERP ====
 
   const onChangeField = (k: keyof EmpreendimentoForm, v: any) =>
     setForm((prev) => ({ ...prev, [k]: v }));
@@ -447,6 +599,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
       entrega_chaves_rs: undefined,
       fotos: [],
     });
+    setErpRowId("");
   };
 
   const removeUnidade = (id: string) => {
@@ -552,6 +705,60 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
       {/* UNIDADE */}
       <div className="bg-white rounded-2xl shadow p-6 space-y-4">
         <div className="text-xl font-semibold">Unidade — Ficha técnica</div>
+
+        {/* ID Único (ERP) + Importar */}
+        <div className="rounded-lg border p-3">
+          <label className="block text-sm font-medium mb-1">ID Único (ERP)</label>
+          <div className="flex gap-2 items-center">
+            <input
+              className="border rounded px-3 py-2 w-full"
+              placeholder="RV-xxxxx ou 2kl9m791cj"
+              value={erpRowId}
+              onChange={(e) => setErpRowId(e.target.value)}
+            />
+            <button
+              type="button"
+              onClick={handleImportFromERP}
+              disabled={!erpRowId.trim() || erpImportLoading}
+              className="px-3 py-2 rounded bg-slate-700 text-white disabled:opacity-60"
+            >
+              {erpImportLoading ? "Importando..." : "Importar do ERP"}
+            </button>
+          </div>
+
+          {/* badge de status vindo do ERP se houver */}
+          {unidadeDraft?.status_vendas && (
+            <div className="mt-2">
+              <span
+                className={
+                  "inline-block text-xs px-2 py-1 rounded " +
+                  (unidadeDraft.status_vendas === "Reservado"
+                    ? "bg-yellow-100 text-yellow-800"
+                    : unidadeDraft.status_vendas === "Vendido"
+                    ? "bg-green-100 text-green-800"
+                    : "bg-gray-100 text-gray-800")
+                }
+              >
+                {unidadeDraft.status_vendas}
+              </span>
+
+              {/* Botão de reservar/desfazer ao lado da ficha */}
+              <button
+                type="button"
+                className={
+                  "ml-2 px-3 py-1 rounded text-white " +
+                  (unidadeDraft.status_vendas === "Reservado" ? "bg-slate-600" : "bg-blue-600")
+                }
+                onClick={() => handleToggleReservaAtual(unidadeDraft.erp_rowname, unidadeDraft.status_vendas)}
+                disabled={!unidadeDraft.erp_rowname}
+                title={!unidadeDraft.erp_rowname ? "Informe/importe o ID único (ERP) para reservar" : ""}
+              >
+                {unidadeDraft.status_vendas === "Reservado" ? "Desfazer" : "Reservar"}
+              </button>
+            </div>
+          )}
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <LabeledInput label="Título">
             <input
@@ -988,77 +1195,4 @@ export default function App() {
       </main>
     </div>
   );
-
-// ===== ERP (Frappe) integration helpers =====
-const ERP_BASE = import.meta.env.VITE_ERP_BASE_URL as string | undefined;
-const ERP_TOKEN_KEY = import.meta.env.VITE_ERP_TOKEN_KEY as string | undefined;
-const ERP_TOKEN_SECRET = import.meta.env.VITE_ERP_TOKEN_SECRET as string | undefined;
-
-function erpAuthHeader() {
-  if (ERP_TOKEN_KEY && ERP_TOKEN_SECRET) {
-    return { Authorization: `token ${ERP_TOKEN_KEY}:${ERP_TOKEN_SECRET}` };
-  }
-  return {};
-}
-
-async function erpGetUnidadeByRowname(rowname: string) {
-  if (!ERP_BASE) throw new Error('VITE_ERP_BASE_URL não configurada');
-  const url = `${ERP_BASE}/api/method/custom.get_unidade_by_rowname?rowname=${encodeURIComponent(rowname)}`;
-  const res = await fetch(url, { headers: { ...erpAuthHeader() }, credentials: 'omit' });
-  const json = await res.json();
-  if (!res.ok || !json?.message) throw new Error(json?.exception || 'Falha ao buscar no ERP');
-  return json.message as any;
-}
-
-async function erpToggleReserva(rowname: string, reservado: 0|1) {
-  if (!ERP_BASE) throw new Error('VITE_ERP_BASE_URL não configurada');
-  const url = `${ERP_BASE}/api/method/custom.set_reserva_db`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...erpAuthHeader() },
-    credentials: 'omit',
-    body: JSON.stringify({ rowname, reservado }),
-  });
-  const json = await res.json();
-  if (!res.ok || !json?.message) throw new Error(json?.exception || 'Falha ao reservar no ERP');
-  return json.message as any;
-}
-// ===== end ERP helpers =====
-
-  {/* ERP: ID Único + Importar */}
-  <div className="flex items-end gap-2 mb-3">
-    <LabeledInput label="ID Único (ERP)" placeholder="ex.: 2kl9m791cj"
-      value={unidadeDraft.erp_rowname || ""} onChange={e=>setUnidadeDraft({...unidadeDraft, erp_rowname:e.target.value})}/>
-    <button
-      className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-      onClick={async()=>{ 
-        if(!unidadeDraft.erp_rowname){ alert('Informe o ID Único (ERP)'); return; }
-        try{
-          const data = await erpGetUnidadeByRowname(unidadeDraft.erp_rowname);
-          setUnidadeDraft({
-            ...unidadeDraft,
-            titulo: data.unidade || unidadeDraft.titulo,
-            n_unidade: data.n_unidade || unidadeDraft.n_unidade,
-            area_privativa_m2: data.area_priv || unidadeDraft.area_privativa_m2,
-            area_comum_m2: data.area_comum || unidadeDraft.area_comum_m2,
-            area_aberta_m2: data.area_aberta || unidadeDraft.area_aberta_m2,
-            total_m2: data.total_m2 || unidadeDraft.total_m2,
-            area_interna_rs: data.preco_interno || unidadeDraft.area_interna_rs,
-            area_externa_rs: data.preco_externo || unidadeDraft.area_externa_rs,
-            total_rs: data.total_rs || unidadeDraft.total_rs,
-            entrada_rs: data.entrada_rs || unidadeDraft.entrada_rs,
-            reforco_rs: data.reforco_rs || unidadeDraft.reforco_rs,
-            parcelas_rs: data.parcelas_rs || unidadeDraft.parcelas_rs,
-            entrega_chaves_rs: data.entrega_rs || unidadeDraft.entrega_chaves_rs,
-            status_vendas: data.status_vendas || unidadeDraft.status_vendas,
-          });
-          alert('Dados importados do ERP com sucesso.');
-        }catch(err:any){
-          alert('Falha ao importar do ERP: '+ (err?.message||err));
-        }
-      }}
-    >
-      Importar do ERP
-    </button>
-  </div>
 }
