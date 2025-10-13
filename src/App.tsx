@@ -120,6 +120,38 @@ async function resizeImage(
   return out;
 }
 
+// ----------------- ERP helpers -----------------
+const ERP_BASE = import.meta.env.VITE_ERP_BASE_URL;
+const ERP_KEY = import.meta.env.VITE_ERP_TOKEN_KEY;
+const ERP_SECRET = import.meta.env.VITE_ERP_TOKEN_SECRET;
+
+async function erpGetUnidadeByRowname(rowname: string) {
+  if (!ERP_BASE) throw new Error("VITE_ERP_BASE_URL não configurada");
+  const url = `${ERP_BASE}/api/method/custom.get_unidade_by_rowname?rowname=${encodeURIComponent(rowname)}`;
+  const headers: Record<string, string> = {};
+  if (ERP_KEY && ERP_SECRET) headers["Authorization"] = `token ${ERP_KEY}:${ERP_SECRET}`;
+  const r = await fetch(url, { headers, credentials: ERP_KEY ? "omit" : "include" });
+  if (!r.ok) throw new Error("Falha ao buscar unidade no ERP");
+  const data = await r.json();
+  return data.message || data;
+}
+
+async function erpToggleReserva(rowname: string, reservado: 0 | 1) {
+  if (!ERP_BASE) throw new Error("VITE_ERP_BASE_URL não configurada");
+  const url = `${ERP_BASE}/api/method/custom.set_reserva_db`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (ERP_KEY && ERP_SECRET) headers["Authorization"] = `token ${ERP_KEY}:${ERP_SECRET}`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers,
+    credentials: ERP_KEY ? "omit" : "include",
+    body: JSON.stringify({ rowname, reservado }),
+  });
+  if (!r.ok) throw new Error("Falha ao reservar/desfazer no ERP");
+  const data = await r.json();
+  return data.message || data;
+}
+
 // ----------------- tipos/UI -----------------
 type Tab = "empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario";
 
@@ -128,6 +160,8 @@ export type Unidade = {
   id: string;
   titulo: string;
   n_unidade?: string;
+  erp_rowname?: string;
+  status_vendas?: string;
   // ficha
   area_privativa_m2?: number;
   area_comum_m2?: number;
@@ -327,7 +361,22 @@ const EmpreendimentosView: React.FC<{
                           <div className="w-full h-full flex items-center justify-center text-gray-500">Sem foto</div>
                         )}
                       </div>
-                      <div className="font-medium text-lg">{u.titulo || "Unidade"}</div>
+                      <div className="font-medium text-lg flex items-center gap-2">
+                        {u.titulo || "Unidade"}
+                        {u.status_vendas && (
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full ${
+                              u.status_vendas === "Reservado"
+                                ? "bg-yellow-100 text-yellow-700"
+                                : u.status_vendas === "Vendido"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-gray-100 text-gray-600"
+                            }`}
+                          >
+                            {u.status_vendas}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-gray-500">{u.n_unidade ? `Nº ${u.n_unidade}` : "-"}</div>
                       <div className="mt-3">
                         <button
@@ -388,6 +437,8 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     id: uid("uni"),
     titulo: "",
     n_unidade: "",
+    erp_rowname: "",
+    status_vendas: undefined,
     area_privativa_m2: undefined,
     area_comum_m2: undefined,
     area_aberta_m2: undefined,
@@ -427,6 +478,8 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
       id: uid("uni"),
       titulo: "",
       n_unidade: "",
+      erp_rowname: "",
+      status_vendas: undefined,
       area_privativa_m2: undefined,
       area_comum_m2: undefined,
       area_aberta_m2: undefined,
@@ -531,22 +584,40 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
           </LabeledInput>
         </div>
 
-        <div className="rounded-xl border p-4">
-          <div className="text-lg font-semibold mb-2">Capa do empreendimento</div>
-          <input type="file" accept="image/*" onChange={onPickCapa} />
-          {form.capa && (
-            <div className="mt-3">
-              <img src={form.capa} className="w-full max-w-3xl rounded-xl object-cover aspect-[16/9]" />
+        {/* Capa */}
+        <div>
+          <label className="block text-sm font-medium mb-1">Capa</label>
+          {(form as any).capa ? (
+            <div className="flex items-center gap-4">
+              <img src={(form as any).capa} className="w-48 h-32 object-cover rounded-lg border" />
+              <button
+                onClick={() => onChangeField("capa", undefined)}
+                className="text-sm text-red-600"
+              >
+                Remover
+              </button>
             </div>
+          ) : (
+            <input type="file" accept="image/*" onChange={onPickCapa} />
           )}
         </div>
       </div>
 
-      {/* UNIDADE */}
+      {/* UNIDADES */}
       <div className="bg-white rounded-2xl shadow p-6 space-y-4">
-        <div className="text-xl font-semibold">Unidade — Ficha técnica</div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <LabeledInput label="Título">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-semibold">Unidades</h3>
+          <button
+            onClick={addUnidade}
+            className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm"
+          >
+            Adicionar unidade
+          </button>
+        </div>
+
+        {/* Form da unidade em edição */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <LabeledInput label="Unidade (título)">
             <input
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.titulo}
@@ -560,186 +631,209 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
               onChange={(e) => setUnidadeDraft((u) => ({ ...u, n_unidade: e.target.value }))}
             />
           </LabeledInput>
-          <LabeledInput label="Área M² Privativa">
-            <input
-              className="w-full border rounded-lg p-2"
-              value={unidadeDraft.area_privativa_m2 ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, area_privativa_m2: e.target.value ? Number(e.target.value) : undefined }))
-              }
-            />
+
+          <LabeledInput label="ID Único (ERP)">
+            <div className="flex gap-2">
+              <input
+                className="w-full border rounded-lg p-2"
+                placeholder="ex.: RV-xxxxxx"
+                value={unidadeDraft.erp_rowname ?? ""}
+                onChange={(e) => setUnidadeDraft((u) => ({ ...u, erp_rowname: e.target.value }))}
+              />
+              <button
+                type="button"
+                className="px-3 py-2 bg-blue-600 text-white rounded"
+                onClick={async () => {
+                  if (!unidadeDraft.erp_rowname) { alert("Informe o ID Único do ERP."); return; }
+                  try {
+                    const d = await erpGetUnidadeByRowname(unidadeDraft.erp_rowname);
+                    setUnidadeDraft((u) => ({
+                      ...u,
+                      titulo: d.unidade || u.titulo,
+                      n_unidade: d.n_unidade || u.n_unidade,
+                      area_privativa_m2: d.area_priv ?? u.area_privativa_m2,
+                      area_comum_m2: d.area_comum ?? u.area_comum_m2,
+                      area_aberta_m2: d.area_aberta ?? u.area_aberta_m2,
+                      total_m2: d.total_m2 ?? u.total_m2,
+                      area_interna_rs: d.preco_interno ?? u.area_interna_rs,
+                      area_externa_rs: d.preco_externo ?? u.area_externa_rs,
+                      total_rs: d.total_rs ?? u.total_rs,
+                      entrada_rs: d.entrada_rs ?? u.entrada_rs,
+                      reforco_rs: d.reforco_rs ?? u.reforco_rs,
+                      parcelas_rs: d.parcelas_rs ?? u.parcelas_rs,
+                      entrega_chaves_rs: d.entrega_rs ?? u.entrega_chaves_rs,
+                      status_vendas: d.status_vendas || u.status_vendas,
+                    }));
+                    alert("Ficha importada do ERP!");
+                  } catch (e:any) {
+                    alert(e?.message || "Falha ao importar do ERP");
+                  }
+                }}
+              >
+                Importar do ERP
+              </button>
+            </div>
+            {unidadeDraft.status_vendas && (
+              <div className="mt-2 text-xs">
+                Status ERP: <b>{unidadeDraft.status_vendas}</b>{" "}
+                {unidadeDraft.erp_rowname && (
+                  <button
+                    type="button"
+                    className="ml-2 px-2 py-1 border rounded"
+                    onClick={async () => {
+                      try {
+                        const novo = unidadeDraft.status_vendas === "Reservado" ? 0 : 1;
+                        const r = await erpToggleReserva(unidadeDraft.erp_rowname!, novo as 0|1);
+                        const s = r.status_vendas || (novo ? "Reservado" : "Disponivel");
+                        setUnidadeDraft((u)=>({...u, status_vendas:s}));
+                      } catch (e:any) {
+                        alert(e?.message || "Erro ao reservar/desfazer");
+                      }
+                    }}
+                  >
+                    {unidadeDraft.status_vendas === "Reservado" ? "Desfazer" : "Reservar"}
+                  </button>
+                )}
+              </div>
+            )}
           </LabeledInput>
 
+          {/* Ficha */}
+          <LabeledInput label="Área M² Privativa">
+            <input
+              type="number"
+              className="w-full border rounded-lg p-2"
+              value={unidadeDraft.area_privativa_m2 ?? ""}
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, area_privativa_m2: e.target.value ? Number(e.target.value) : undefined }))}
+            />
+          </LabeledInput>
           <LabeledInput label="Área M² Comum">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.area_comum_m2 ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, area_comum_m2: e.target.value ? Number(e.target.value) : undefined }))
-              }
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, area_comum_m2: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
           <LabeledInput label="Área M² Aberta">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.area_aberta_m2 ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, area_aberta_m2: e.target.value ? Number(e.target.value) : undefined }))
-              }
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, area_aberta_m2: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
           <LabeledInput label="Total M²">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.total_m2 ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, total_m2: e.target.value ? Number(e.target.value) : undefined }))
-              }
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, total_m2: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
 
           <LabeledInput label="Área Interna (R$)">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.area_interna_rs ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, area_interna_rs: e.target.value ? Number(e.target.value) : undefined }))
-              }
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, area_interna_rs: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
           <LabeledInput label="Área Externa (R$)">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.area_externa_rs ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, area_externa_rs: e.target.value ? Number(e.target.value) : undefined }))
-              }
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, area_externa_rs: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
           <LabeledInput label="Total (R$)">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.total_rs ?? ""}
               onChange={(e) => setUnidadeDraft((u) => ({ ...u, total_rs: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
-
           <LabeledInput label="Entrada (R$)">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.entrada_rs ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, entrada_rs: e.target.value ? Number(e.target.value) : undefined }))
-              }
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, entrada_rs: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
           <LabeledInput label="Reforço (R$)">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.reforco_rs ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, reforco_rs: e.target.value ? Number(e.target.value) : undefined }))
-              }
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, reforco_rs: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
           <LabeledInput label="Parcelas (R$)">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.parcelas_rs ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, parcelas_rs: e.target.value ? Number(e.target.value) : undefined }))
-              }
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, parcelas_rs: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
-
           <LabeledInput label="Entrega das Chaves (R$)">
             <input
+              type="number"
               className="w-full border rounded-lg p-2"
               value={unidadeDraft.entrega_chaves_rs ?? ""}
-              onChange={(e) =>
-                setUnidadeDraft((u) => ({ ...u, entrega_chaves_rs: e.target.value ? Number(e.target.value) : undefined }))
-              }
+              onChange={(e) => setUnidadeDraft((u) => ({ ...u, entrega_chaves_rs: e.target.value ? Number(e.target.value) : undefined }))}
             />
           </LabeledInput>
-        </div>
 
-        <div className="mt-2">
-          <div className="text-sm font-medium">Álbum da unidade</div>
-          <input type="file" accept="image/*" onChange={onPickFotoUnidade} />
-          {unidadeDraft.fotos.length > 0 && (
-            <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
-              {unidadeDraft.fotos.map((f, i) => (
-                <img key={i} src={f} className="w-full aspect-[16/9] object-cover rounded-lg" />
+          {/* Fotos */}
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium mb-1">Fotos da Unidade</label>
+            <input type="file" accept="image/*" onChange={onPickFotoUnidade} />
+            <div className="mt-2 flex flex-wrap gap-2">
+              {(unidadeDraft.fotos || []).map((f, i) => (
+                <img key={i} src={f} className="w-24 h-24 object-cover rounded border" />
               ))}
             </div>
-          )}
+            {(unidadeDraft.fotos || []).length > 0 && (
+              <button
+                onClick={() => verFotos(unidadeDraft.fotos)}
+                className="mt-2 text-sm text-blue-600"
+              >
+                Ver fotos em nova aba
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex gap-2">
-          <button className="px-4 py-2 bg-black text-white rounded-lg" onClick={addUnidade}>Adicionar unidade</button>
-          <button
-            className="px-4 py-2 border rounded-lg"
-            onClick={() =>
-              setUnidadeDraft({
-                id: uid("uni"),
-                titulo: "",
-                n_unidade: "",
-                area_privativa_m2: undefined,
-                area_comum_m2: undefined,
-                area_aberta_m2: undefined,
-                total_m2: undefined,
-                area_interna_rs: undefined,
-                area_externa_rs: undefined,
-                total_rs: undefined,
-                entrada_rs: undefined,
-                reforco_rs: undefined,
-                parcelas_rs: undefined,
-                entrega_chaves_rs: undefined,
-                fotos: [],
-              })
-            }
-          >
-            Limpar
-          </button>
-        </div>
-      </div>
-
-      {/* Tabela de unidades */}
-      <div className="bg-white rounded-2xl shadow p-6">
-        <div className="text-lg font-semibold mb-3">Unidades cadastradas</div>
-        {form.unidades.length === 0 ? (
-          <div className="text-sm text-gray-500">Nenhuma unidade adicionada.</div>
-        ) : (
+        {/* Tabela de unidades já adicionadas */}
+        {form.unidades.length > 0 && (
           <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <table className="w-full text-sm">
               <thead>
-                <tr className="text-left border-b">
-                  <th className="py-2 pr-4">Título</th>
-                  <th className="py-2 pr-4">Nº</th>
-                  <th className="py-2 pr-4">Priv.(m²)</th>
-                  <th className="py-2 pr-4">Comum(m²)</th>
-                  <th className="py-2 pr-4">Aberta(m²)</th>
-                  <th className="py-2 pr-4">Total(m²)</th>
-                  <th className="py-2 pr-4">Fotos</th>
-                  <th className="py-2 pr-4"></th>
+                <tr className="text-left bg-gray-50">
+                  <th className="p-2">Título</th>
+                  <th className="p-2">Nº</th>
+                  <th className="p-2">Status</th>
+                  <th className="p-2">Fotos</th>
+                  <th className="p-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {form.unidades.map((u) => (
-                  <tr key={u.id} className="border-b">
-                    <td className="py-2 pr-4">{u.titulo}</td>
-                    <td className="py-2 pr-4">{u.n_unidade ?? "-"}</td>
-                    <td className="py-2 pr-4">{u.area_privativa_m2 ?? "-"}</td>
-                    <td className="py-2 pr-4">{u.area_comum_m2 ?? "-"}</td>
-                    <td className="py-2 pr-4">{u.area_aberta_m2 ?? "-"}</td>
-                    <td className="py-2 pr-4">{u.total_m2 ?? "-"}</td>
-                    <td className="py-2 pr-4">
-                      <button className="text-blue-600" onClick={() => verFotos(u.fotos)}>
-                        {u.fotos.length} foto(s)
-                      </button>
-                    </td>
-                    <td className="py-2 pr-4">
-                      <button className="text-red-600" onClick={() => removeUnidade(u.id)}>
+                  <tr key={u.id} className="border-t">
+                    <td className="p-2">{u.titulo}</td>
+                    <td className="p-2">{u.n_unidade}</td>
+                    <td className="p-2">{u.status_vendas || "-"}</td>
+                    <td className="p-2">{u.fotos?.length || 0}</td>
+                    <td className="p-2 text-right">
+                      <button
+                        className="text-red-600"
+                        onClick={() => removeUnidade(u.id)}
+                      >
                         Remover
                       </button>
                     </td>
@@ -751,11 +845,12 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
         )}
       </div>
 
-      <div className="flex gap-2">
-        <button className="px-4 py-2 bg-black text-white rounded-lg" onClick={salvar}>
+      {/* Ações */}
+      <div className="flex items-center gap-3">
+        <button className="bg-blue-600 text-white px-4 py-2 rounded-lg" onClick={salvar}>
           Salvar
         </button>
-        <button className="px-4 py-2 border rounded-lg" onClick={onCancel}>
+        <button className="px-4 py-2 rounded-lg border" onClick={onCancel}>
           Cancelar
         </button>
       </div>
@@ -763,222 +858,129 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
   );
 }
 
-// ----------------- Usuários (admin) -----------------
-const UsuariosAdminView: React.FC = () => {
-  const db = getFirestore();
-  const [list, setList] = useState<{ id: string; data: AppUserDoc }[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"admin" | "user">("user");
-  const [mustChange, setMustChange] = useState(true);
-  const [saving, setSaving] = useState(false);
+// ----------------- Usuários -----------------
+function UsuariosView() {
+  const [users, setUsers] = useState<AppUserDoc[]>([]);
 
   useEffect(() => {
-    const q = query(collection(db, "users"), orderBy("email"));
-    const unsub = onSnapshot(q, (snap) => {
-      const arr: { id: string; data: AppUserDoc }[] = [];
-      snap.forEach((d) => arr.push({ id: d.id, data: d.data() as AppUserDoc }));
-      setList(arr);
-      setLoading(false);
+    const db = getFirestore();
+    const q = query(collection(db, "users"), orderBy("createdAt", "desc"));
+    return onSnapshot(q, (snap) => {
+      const arr: AppUserDoc[] = [];
+      snap.forEach((d) => arr.push(d.data() as any));
+      setUsers(arr);
     });
-    return () => unsub();
-  }, [db]);
+  }, []);
 
   return (
-    <div className="max-w-4xl">
+    <div>
       <h1 className="text-2xl font-semibold mb-4">Usuários</h1>
-      <p className="text-sm text-gray-500 mb-4">
-        <b>Adicionar usuário (somente Firestore)</b>: este botão só cria/edita o documento na coleção <code>users</code>.
-        Para permitir login, crie o usuário também em <i>Authentication → Users</i> no Console do Firebase.
-      </p>
-
-      <div className="bg-white rounded-xl shadow p-4 mb-6">
-        <h2 className="font-medium mb-3">Adicionar/Atualizar usuário (Firestore)</h2>
-        <div className="grid md:grid-cols-4 gap-3">
-          <input placeholder="Nome" value={name} onChange={(e) => setName(e.target.value)} className="border p-2 rounded" />
-          <input placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} className="border p-2 rounded" />
-          <select value={role} onChange={(e) => setRole(e.target.value as "admin" | "user")} className="border p-2 rounded">
-            <option value="user">user</option>
-            <option value="admin">admin</option>
-          </select>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={mustChange} onChange={(e) => setMustChange(e.target.checked)} />
-            Troca obrigatória?
-          </label>
-        </div>
-        <button
-          disabled={saving}
-          onClick={async () => {
-            if (!email) { alert("Informe ao menos o e-mail."); return; }
-            setSaving(true);
-            try {
-              await addDoc(collection(db, "users"), {
-                name: name || email.split("@")[0],
-                email,
-                role,
-                mustChangePassword: mustChange,
-              });
-              setName(""); setEmail(""); setRole("user"); setMustChange(true);
-            } finally { setSaving(false); }
-          }}
-          className="mt-3 px-3 py-2 bg-blue-600 text-white rounded"
-        >
-          {saving ? "Salvando..." : "Adicionar (Firestore)"}
-        </button>
-      </div>
-
-      <div className="bg-white rounded-xl shadow p-4">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-gray-500">
-              <th className="py-2">Nome</th>
-              <th className="py-2">E-mail</th>
-              <th className="py-2">Perfil</th>
-              <th className="py-2">Troca obrigatória?</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && <tr><td className="py-3" colSpan={4}>Carregando...</td></tr>}
-            {!loading && list.map(({ id, data }) => (
-              <tr key={id} className="border-t">
-                <td className="py-2">{data.name}</td>
-                <td className="py-2">{data.email}</td>
-                <td className="py-2">{data.role}</td>
-                <td className="py-2">
-                  {data.mustChangePassword ? "Sim" : "Não"}{" "}
-                  <button
-                    onClick={async () => {
-                      await updateDoc(docRef(getFirestore(), "users", id), {
-                        mustChangePassword: !data.mustChangePassword,
-                      });
-                    }}
-                    className="ml-3 text-blue-600"
-                  >
-                    Alternar
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="space-y-2">
+        {users.map((u) => (
+          <div key={u.uid} className="bg-white rounded-lg border p-3">
+            <div className="font-medium">{u.name || u.email}</div>
+            <div className="text-xs text-gray-500">{u.email}</div>
+          </div>
+        ))}
       </div>
     </div>
   );
-};
-
-// ----------------- Login -----------------
-const Login: React.FC = () => {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-[#F3F3F3] text-black relative">
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setLoading(true);
-          try { await login(email, password); }
-          catch (e: any) { alert(e?.message || "Erro ao entrar"); }
-          finally { setLoading(false); }
-        }}
-        className="bg-white p-8 rounded-2xl w-full max-w-sm shadow-xl border border-gray-200"
-      >
-        <div className="-mx-8 -mt-8 mb-6 px-8 py-4 bg-black rounded-t-2xl text-white text-center">
-          <h1 className="text-2xl font-bold">Kolling | Book de Empreendimentos</h1>
-        </div>
-        <label className="block text-sm mb-1">E-mail</label>
-        <input value={email} onChange={(e) => setEmail(e.target.value)} className="w-full mb-4 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
-        <label className="block text-sm mb-1">Senha</label>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full mb-6 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
-        <button disabled={loading} className="w-full py-2 rounded bg-black text-white hover:opacity-90 disabled:opacity-60">
-          {loading ? "Entrando..." : "Entrar"}
-        </button>
-      </form>
-
-      <div className="absolute bottom-4 left-0 right-0 text-center text-xs text-gray-700">
-        Propriedade Inova Análise
-      </div>
-    </div>
-  );
-};
+}
 
 // ----------------- App -----------------
 export default function App() {
-  const [firebaseReady, setFirebaseReady] = useState(false);
-  const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
-  const [empList, setEmpList] = useState<(Emp & { id: string })[]>([]);
   const [tab, setTab] = useState<Tab>("empreendimentos");
-  const [editingEmp, setEditingEmp] = useState<EmpreendimentoForm | null>(null);
+  const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
+  const [data, setData] = useState<(Emp & { id: string })[]>([]);
+  const [editing, setEditing] = useState<EmpreendimentoForm | null>(null);
 
   useEffect(() => {
     const unsub = listenAuth(async (u) => {
-      if (!u) { setUserDoc(null); setFirebaseReady(true); return; }
-      let doc = await getUserDoc(u.uid);
-      if (!doc) {
-        doc = { name: u.email?.split("@")[0] || "Usuário", email: u.email || "", role: "user", mustChangePassword: false };
-        await ensureUserDoc(u.uid, doc);
+      if (!u) {
+        setUserDoc(null);
+        return;
       }
-      setUserDoc(doc); setFirebaseReady(true);
+      const doc = await ensureUserDoc(u);
+      setUserDoc(doc);
     });
     return () => unsub();
   }, []);
 
   useEffect(() => {
-    const unsub = listenEmpreendimentos((list) => setEmpList(list));
+    const unsub = listenEmpreendimentos((arr) => setData(arr as any));
     return () => unsub();
   }, []);
 
-  if (!firebaseReady) return null;
-  if (!auth.currentUser) return <Login />;
+  const isAdmin = userDoc?.role === "admin";
+
+  const onDelete = async (id: string) => {
+    try {
+      await deleteEmpreendimento(id);
+    } catch (e) {
+      console.error(e);
+      alert("Erro ao excluir");
+    }
+  };
 
   return (
-    <div className="min-h-screen flex bg-gray-100">
-      <Sidebar tab={tab} setTab={setTab} onLogout={() => logout()} userDoc={userDoc!} />
+    <div className="min-h-screen bg-gray-50 flex">
+      {userDoc ? (
+        <>
+          <Sidebar tab={tab} setTab={setTab} onLogout={logout} userDoc={userDoc} />
 
-      <main className="flex-1 p-6">
-        {tab === "empreendimentos" && (
-          <EmpreendimentosView
-            data={empList}
-            isAdmin={userDoc?.role === "admin"}
-            onDelete={async (id) => {
-              try { await deleteEmpreendimento(id); }
-              catch (e: any) { alert(e?.message || "Erro ao excluir"); }
-            }}
-            onEditRequest={(emp) => {
-              // Mapeia Emp -> EmpreendimentoForm para edição (traz também unidades/capa se existirem)
-              const f: EmpreendimentoForm = {
-                id: emp.id,
-                nome: emp.nome,
-                endereco: emp.endereco || "",
-                lat: (emp as any).lat,
-                lng: (emp as any).lng,
-                descricao: (emp as any).descricao,
-                capa: (emp as any).capa, // quando em modo teste
-                unidades: (emp as any).unidades || [],
-              };
-              setEditingEmp(f);
-              setTab("cadastrar");
-            }}
-          />
-        )}
+          <main className="flex-1 p-6">
+            {tab === "empreendimentos" && (
+              <EmpreendimentosView
+                data={data}
+                isAdmin={!!isAdmin}
+                onDelete={onDelete}
+                onEditRequest={(emp) => {
+                  const f: EmpreendimentoForm = {
+                    id: emp.id,
+                    nome: emp.nome,
+                    endereco: emp.endereco || "",
+                    lat: emp.lat,
+                    lng: emp.lng,
+                    descricao: emp.descricao || "",
+                    capa: (emp as any).capa || emp.capaUrl,
+                    unidades: (emp as any).unidades || [],
+                  };
+                  setEditing(f);
+                  setTab("cadastrar");
+                }}
+              />
+            )}
 
-        {tab === "mapa" && <MapaLeaflet empreendimentos={empList as any} />}
+            {tab === "mapa" && <MapaLeaflet empreendimentos={data as any} />}
 
-        {tab === "cadastrar" && userDoc?.role === "admin" && (
-          <CadastrarView
-            editing={editingEmp}
-            onSaved={() => { setEditingEmp(null); setTab("empreendimentos"); }}
-            onCancel={() => { setEditingEmp(null); setTab("empreendimentos"); }}
-          />
-        )}
+            {tab === "cadastrar" && (
+              <CadastrarView
+                editing={editing}
+                onSaved={() => {
+                  setEditing(null);
+                  setTab("empreendimentos");
+                }}
+                onCancel={() => {
+                  setEditing(null);
+                  setTab("empreendimentos");
+                }}
+              />
+            )}
 
-        {tab === "usuarios" && userDoc?.role === "admin" && <UsuariosAdminView />}
-
-        {tab === "meu_usuario" && <Account />}
-      </main>
+            {tab === "usuarios" && <UsuariosView />}
+            {tab === "meu_usuario" && <Account />}
+          </main>
+        </>
+      ) : (
+        <div className="w-full h-screen flex items-center justify-center">
+          <button
+            onClick={login}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg"
+          >
+            Entrar
+          </button>
+        </div>
+      )}
     </div>
   );
 }
