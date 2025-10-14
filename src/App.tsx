@@ -1,10 +1,7 @@
-// src/App.tsx — Modo teste + Mapa real (React-Leaflet)
-// - Usa <MapaLeaflet /> (OpenStreetMap)
-// - Uploads simulados (dataURL) — sem Firebase Storage
-// - Ficha técnica completa por UNIDADE no cadastro
-// - Painel de Empreendimentos com hierarquia (Empreendimento → Unidades)
-// - Tela Usuários com “Adicionar (Firestore)”
-// - <Account /> importado
+// src/App.tsx — Opção B (Proxy no Vercel) + Mapa real (React-Leaflet)
+// - PROXY: front chama /api/erp-proxy; serverless chama o ERP (sem CORS no browser)
+// - Nada de VITE_ERP_* no front; tokens ficam só no servidor (Vercel Functions)
+// - O restante do app segue igual ao seu fluxo (unidades, cadastro, mapa, usuários)
 // ----------------------------------------------------------------------
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -36,57 +33,33 @@ import {
   addDoc,
 } from "firebase/firestore";
 
-// ==== ERP helpers (seguro p/ TypeScript) ====
-const ERP_BASE: string = (import.meta.env.VITE_ERP_BASE_URL || '').replace(/\/$/, '');
-const ERP_TOKEN_KEY: string | undefined = import.meta.env.VITE_ERP_TOKEN_KEY;
-const ERP_TOKEN_SECRET: string | undefined = import.meta.env.VITE_ERP_TOKEN_SECRET;
-const ERP_AUTH_HEADER: string | null =
-  ERP_TOKEN_KEY && ERP_TOKEN_SECRET ? `token ${ERP_TOKEN_KEY}:${ERP_TOKEN_SECRET}` : null;
-
-/** headers de forma segura para o TS */
-function erpHeaders(extra?: Record<string, string>): HeadersInit {
-  const base: Record<string, string> = {};
-  if (ERP_AUTH_HEADER) base['Authorization'] = ERP_AUTH_HEADER;
-  if (extra) Object.assign(base, extra);
-  return base;
-}
-
-/** GET unidade por rowname */
+// ==== ERP helpers via PROXY (sem CORS no browser) ====
 async function erpGetUnidadeByRowname(rowname: string) {
-  if (!ERP_BASE) throw new Error('VITE_ERP_BASE_URL ausente');
-  const url = `${ERP_BASE}/api/method/custom.get_unidade_by_rowname?rowname=${encodeURIComponent(
-    rowname.trim()
-  )}`;
-  const res = await fetch(url, {
-    headers: erpHeaders(),
-    credentials: ERP_AUTH_HEADER ? 'omit' : 'include',
-  });
+  const url = `/api/erp-proxy?kind=get_unidade&rowname=${encodeURIComponent(rowname.trim())}`;
+  const res = await fetch(url);
   const json = await res.json();
   if (!res.ok) {
-    const msg = (json && (json.message || json.exc || json._server_messages)) || 'Falha ERP';
+    const msg = (json && (json.message || json.error || json.exc || json._server_messages)) || 'Falha ERP';
     throw new Error(typeof msg === 'string' ? msg : 'Falha ERP');
   }
   return json?.message || json;
 }
 
-/** POST reservar/desfazer no ERP */
 async function erpToggleReserva(rowname: string, reservar: boolean) {
-  if (!ERP_BASE) throw new Error('VITE_ERP_BASE_URL ausente');
-  const url = `${ERP_BASE}/api/method/custom.set_reserva_db`;
+  const url = `/api/erp-proxy?kind=toggle_reserva`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: erpHeaders({ 'Content-Type': 'application/json' }),
-    credentials: ERP_AUTH_HEADER ? 'omit' : 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ rowname, reservado: reservar ? 1 : 0 }),
   });
   const json = await res.json();
   if (!res.ok) {
-    const msg = (json && (json.message || json.exc || json._server_messages)) || 'Falha ERP';
-    throw new Error(typeof msg === 'string' ? msg : 'Falha ERP');
+    const msg = (json && (json.message || json.error || json.exc || json._server_messages)) || 'Falha ERP';
+    throw new Error(typeof msg === 'string' ? msg : 'Falha ERP';
   }
   return json?.message || json;
 }
-// ==== /ERP helpers ====
+// ==== /ERP helpers via PROXY ====
 
 
 function verFotosUnidade(u: any) {
@@ -175,7 +148,6 @@ async function resizeImage(
 // ----------------- tipos/UI -----------------
 type Tab = "empreendimentos" | "mapa" | "cadastrar" | "usuarios" | "meu_usuario";
 
-// Tudo que será salvo no Firestore quando você estiver no modo “teste” (sem Storage)
 export type Unidade = {
   id: string;
   titulo: string;
@@ -192,7 +164,7 @@ export type Unidade = {
   reforco_rs?: number;
   parcelas_rs?: number;
   entrega_chaves_rs?: number;
-  // album (DataURLs)
+  // album
   fotos: string[];
 
   // ERP integration (opcional)
@@ -249,7 +221,7 @@ const Sidebar: React.FC<{
   );
 };
 
-// ----------------- Ficha técnica (visualização somente) -----------------
+// ----------------- Ficha técnica (visualização) -----------------
 const FichaTecnica: React.FC<{ u: Partial<Unidade> }> = ({ u }) => {
   const Item = ({ label, value }: { label: string; value?: string | number }) => (
     <div className="grid grid-cols-[1fr_auto] gap-3 text-sm">
@@ -289,7 +261,6 @@ const EmpreendimentosView: React.FC<{
   const [selected, setSelected] = useState<(Emp & { id: string }) | null>(null);
   const selectedUnidades: Unidade[] = useMemo(() => {
     if (!selected) return [];
-    // Emp do Firestore pode não declarar, então tratamos como any
     return (selected as any).unidades ?? [];
   }, [selected]);
 
@@ -358,7 +329,6 @@ const EmpreendimentosView: React.FC<{
                   <div className="w-full h-full flex items-center justify-center text-gray-500">Sem capa</div>
                 )}
               </div>
-              {/* A ficha técnica NÃO aparece mais aqui (é por unidade, mostrada ao abrir fotos) */}
             </div>
 
             <div className="space-y-4">
@@ -367,7 +337,7 @@ const EmpreendimentosView: React.FC<{
                 <p className="text-gray-600">{selected.endereco}</p>
               </div>
 
-              {/* Cards de UNIDADES (hierarquia) */}
+              {/* Cards de UNIDADES */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
                 {selectedUnidades.length === 0 && (
                   <div className="text-gray-500">Nenhuma unidade cadastrada neste empreendimento.</div>
@@ -400,7 +370,6 @@ const EmpreendimentosView: React.FC<{
                         >
                           {status}
                         </span>
-                        {/* Botão (somente visual/local). Para efeito total, sincronize Firestore depois. */}
                         <button
                           type="button"
                           className={
@@ -415,9 +384,7 @@ const EmpreendimentosView: React.FC<{
                             const reservar = status !== "Reservado";
                             try {
                               await erpToggleReserva(u.erp_rowname, reservar);
-                              // Atualiza localmente
                               (u as any).status_vendas = reservar ? "Reservado" : "Disponivel";
-                              // força re-render
                               setSelected((prev) => (prev ? { ...prev } as any : prev));
                             } catch (e: any) {
                               alert(e?.message || "Falha ao alternar reserva");
@@ -506,11 +473,9 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     status_vendas: undefined,
   });
 
-  // Estados pedidos para integração ERP
   const [erpRowId, setErpRowId] = React.useState<string>("");
   const [erpImportLoading, setErpImportLoading] = React.useState<boolean>(false);
 
-  // ==== Ações ERP dentro do componente ====
   // Importar campos do ERP para o formulário atual (unidadeDraft)
   async function handleImportFromERP() {
     if (!erpRowId.trim()) return;
@@ -559,7 +524,6 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
       alert(e?.message || "Falha ao alternar reserva");
     }
   }
-  // ==== /Ações ERP ====
 
   const onChangeField = (k: keyof EmpreendimentoForm, v: any) =>
     setForm((prev) => ({ ...prev, [k]: v }));
@@ -647,10 +611,8 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
 
   return (
     <div className="space-y-6">
-      {/* Cabeçalho */}
       <h1 className="text-3xl font-semibold">{form.id ? "Editar Empreendimento" : "Cadastrar Empreendimento"}</h1>
 
-      {/* Dados do empreendimento */}
       <div className="bg-white rounded-2xl shadow p-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <LabeledInput label="Nome">
@@ -742,7 +704,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
                 {unidadeDraft.status_vendas}
               </span>
 
-              {/* Botão de reservar/desfazer ao lado da ficha */}
+              {/* Botão de reservar/desfazer */}
               <button
                 type="button"
                 className={
@@ -1162,7 +1124,6 @@ export default function App() {
               catch (e: any) { alert(e?.message || "Erro ao excluir"); }
             }}
             onEditRequest={(emp) => {
-              // Mapeia Emp -> EmpreendimentoForm para edição (traz também unidades/capa se existirem)
               const f: EmpreendimentoForm = {
                 id: emp.id,
                 nome: emp.nome,
