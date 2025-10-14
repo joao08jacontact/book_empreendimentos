@@ -55,7 +55,7 @@ async function erpToggleReserva(rowname: string, reservar: boolean) {
   const json = await res.json();
   if (!res.ok) {
     const msg = (json && (json.message || json.error || json.exc || json._server_messages)) || 'Falha ERP';
-    throw new Error(typeof msg === 'string' ? msg : 'Falha ERP';
+    throw new Error(typeof msg === 'string' ? msg : 'Falha ERP');
   }
   return json?.message || json;
 }
@@ -152,7 +152,6 @@ export type Unidade = {
   id: string;
   titulo: string;
   n_unidade?: string;
-  // ficha
   area_privativa_m2?: number;
   area_comum_m2?: number;
   area_aberta_m2?: number;
@@ -164,10 +163,7 @@ export type Unidade = {
   reforco_rs?: number;
   parcelas_rs?: number;
   entrega_chaves_rs?: number;
-  // album
   fotos: string[];
-
-  // ERP integration (opcional)
   erp_rowname?: string;
   status_vendas?: 'Disponivel' | 'Reservado' | 'Vendido';
 };
@@ -179,11 +175,10 @@ export type EmpreendimentoForm = {
   lat?: number;
   lng?: number;
   descricao?: string;
-  capa?: string; // DataURL (modo teste)
+  capa?: string;
   unidades: Unidade[];
 };
 
-// ----------------- Sidebar -----------------
 const Sidebar: React.FC<{
   tab: Tab;
   setTab: (t: Tab) => void;
@@ -221,7 +216,6 @@ const Sidebar: React.FC<{
   );
 };
 
-// ----------------- Ficha técnica (visualização) -----------------
 const FichaTecnica: React.FC<{ u: Partial<Unidade> }> = ({ u }) => {
   const Item = ({ label, value }: { label: string; value?: string | number }) => (
     <div className="grid grid-cols-[1fr_auto] gap-3 text-sm">
@@ -251,7 +245,6 @@ const FichaTecnica: React.FC<{ u: Partial<Unidade> }> = ({ u }) => {
   );
 };
 
-// ----------------- Lista/Álbum/HIERARQUIA -----------------
 const EmpreendimentosView: React.FC<{
   data: (Emp & { id: string })[];
   isAdmin: boolean;
@@ -337,7 +330,6 @@ const EmpreendimentosView: React.FC<{
                 <p className="text-gray-600">{selected.endereco}</p>
               </div>
 
-              {/* Cards de UNIDADES */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
                 {selectedUnidades.length === 0 && (
                   <div className="text-gray-500">Nenhuma unidade cadastrada neste empreendimento.</div>
@@ -417,7 +409,6 @@ const EmpreendimentosView: React.FC<{
   );
 };
 
-// ----------------- Inputs helpers -----------------
 const LabeledInput = ({
   label,
   children,
@@ -433,7 +424,6 @@ const LabeledInput = ({
   </div>
 );
 
-// ----------------- CadastrarView (com FICHA por unidade) -----------------
 interface CadastrarViewProps {
   editing?: EmpreendimentoForm | null;
   onSaved: () => void;
@@ -468,7 +458,6 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     parcelas_rs: undefined,
     entrega_chaves_rs: undefined,
     fotos: [],
-  
     erp_rowname: undefined,
     status_vendas: undefined,
   });
@@ -476,7 +465,6 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
   const [erpRowId, setErpRowId] = React.useState<string>("");
   const [erpImportLoading, setErpImportLoading] = React.useState<boolean>(false);
 
-  // Importar campos do ERP para o formulário atual (unidadeDraft)
   async function handleImportFromERP() {
     if (!erpRowId.trim()) return;
     setErpImportLoading(true);
@@ -507,7 +495,6 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     }
   }
 
-  // Alternar reserva no ERP a partir do rowname salvo na unidade atual
   async function handleToggleReservaAtual(rowname?: string, estadoAtual?: 'Disponivel' | 'Reservado' | 'Vendido') {
     if (!rowname) {
       alert("ID único (ERP) vazio nesta unidade.");
@@ -582,7 +569,6 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     }
   };
 
-  // Firestore (modo teste: apenas salva DataURLs, sem Storage)
   const salvar = async () => {
     const payload = { ...form };
     if (!payload.nome.trim()) {
@@ -664,11 +650,9 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
         </div>
       </div>
 
-      {/* UNIDADE */}
       <div className="bg-white rounded-2xl shadow p-6 space-y-4">
         <div className="text-xl font-semibold">Unidade — Ficha técnica</div>
 
-        {/* ID Único (ERP) + Importar */}
         <div className="rounded-lg border p-3">
           <label className="block text-sm font-medium mb-1">ID Único (ERP)</label>
           <div className="flex gap-2 items-center">
@@ -688,7 +672,6 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
             </button>
           </div>
 
-          {/* badge de status vindo do ERP se houver */}
           {unidadeDraft?.status_vendas && (
             <div className="mt-2">
               <span
@@ -704,7 +687,6 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
                 {unidadeDraft.status_vendas}
               </span>
 
-              {/* Botão de reservar/desfazer */}
               <button
                 type="button"
                 className={
@@ -880,7 +862,6 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
         </div>
       </div>
 
-      {/* Tabela de unidades */}
       <div className="bg-white rounded-2xl shadow p-6">
         <div className="text-lg font-semibold mb-3">Unidades cadastradas</div>
         {form.unidades.length === 0 ? (
@@ -939,7 +920,6 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
   );
 }
 
-// ----------------- Usuários (admin) -----------------
 const UsuariosAdminView: React.FC = () => {
   const db = getFirestore();
   const [list, setList] = useState<{ id: string; data: AppUserDoc }[]>([]);
@@ -1044,7 +1024,6 @@ const UsuariosAdminView: React.FC = () => {
   );
 };
 
-// ----------------- Login -----------------
 const Login: React.FC = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1081,7 +1060,6 @@ const Login: React.FC = () => {
   );
 };
 
-// ----------------- App -----------------
 export default function App() {
   const [firebaseReady, setFirebaseReady] = useState(false);
   const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
@@ -1131,7 +1109,7 @@ export default function App() {
                 lat: (emp as any).lat,
                 lng: (emp as any).lng,
                 descricao: (emp as any).descricao,
-                capa: (emp as any).capa, // quando em modo teste
+                capa: (emp as any).capa,
                 unidades: (emp as any).unidades || [],
               };
               setEditingEmp(f);
