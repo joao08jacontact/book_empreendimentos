@@ -142,7 +142,7 @@ function ReservaPage() {
         {err && <div className="text-red-600 text-sm">{err}</div>}
         {msg && <div className="text-green-700 text-sm">{msg}</div>}
         <div className="flex gap-2 pt-2">
-          <button type="submit" disabled={(loading || !rowname) || (unidadeDraft?.status_vendas === "Vendido" || status === "Vendido")} className="px-4 py-2 rounded bg-blue-600">
+          <button type="submit" disabled={(loading || !rowname)} className="px-4 py-2 rounded bg-blue-600">
             {loading ? "Enviando..." : "Reservar"}
           </button>
           <a href="/" className="px-4 py-2 rounded border border-gray-300 text-gray-700">Voltar</a>
@@ -493,7 +493,7 @@ const EmpreendimentosView: React.FC<{
                               alert(e?.message || "Falha ao alternar reserva");
                             }
                           }}
-                          disabled={(!u.erp_rowname) || (unidadeDraft?.status_vendas === "Vendido" || status === "Vendido")}
+                          disabled={(!u.erp_rowname) || (status === "Vendido" || status === "Vendido")}
                           title={!u.erp_rowname ? "Informe/importe o ID único (ERP) para reservar" : ""}
                         >
                           {status === "Reservado" ? "Desfazer" : "Reservar"}
@@ -799,7 +799,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
             <button
               type="button"
               onClick={handleImportFromERP}
-              disabled={(!erpRowId.trim() || erpImportLoading) || (unidadeDraft?.status_vendas === "Vendido" || status === "Vendido")}
+              disabled={(!erpRowId.trim() || erpImportLoading) || (status === "Vendido" || status === "Vendido")}
               className="px-3 py-2 rounded bg-slate-700 text-white disabled:opacity-60"
             >
               {erpImportLoading ? "Importando..." : "Importar do ERP"}
@@ -807,7 +807,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
           </div>
 
           {/* badge de status vindo do ERP se houver */}
-          {unidadeDraft?.status_vendas && (
+          {status && (
             <div className="mt-2">
               <span
                 className={
@@ -829,8 +829,8 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
                   "ml-2 px-3 py-1 rounded text-white " +
                   (unidadeDraft.status_vendas === "Reservado" ? "bg-slate-600" : "bg-blue-600")
                 }
-                onClick={() => { const _st = (unidadeDraft?.status_vendas as any) || status; const _rn = (unidadeDraft?.erp_rowname || erpRowId || "").trim(); if (_st==="Vendido") return; if (_st==="Reservado") { handleToggleReservaAtual(_rn, _st as any); } else { abrirFormularioReservaNovaAba(_rn); } }}
-                disabled={(!unidadeDraft.erp_rowname) || (unidadeDraft?.status_vendas === "Vendido" || status === "Vendido")}
+                onClick={() => { const _st = (status as any) || status; const _rn = (unidadeDraft?.erp_rowname || erpRowId || "").trim(); if (_st==="Vendido") return; if (_st==="Reservado") { handleToggleReservaAtual(_rn, _st as any); } else { abrirFormularioReservaNovaAba(_rn); } }}
+                disabled={(!unidadeDraft.erp_rowname) || (status === "Vendido" || status === "Vendido")}
                 title={!unidadeDraft.erp_rowname ? "Informe/importe o ID único (ERP) para reservar" : ""}
               >
                 {unidadeDraft.status_vendas === "Reservado" ? "Desfazer" : "Reservar"}
@@ -1103,7 +1103,7 @@ const UsuariosAdminView: React.FC = () => {
           </label>
         </div>
         <button
-          disabled={(saving) || (unidadeDraft?.status_vendas === "Vendido" || status === "Vendido")}
+          disabled={(saving) || (status === "Vendido" || status === "Vendido")}
           onClick={async () => {
             if (!email) { alert("Informe ao menos o e-mail."); return; }
             setSaving(true);
@@ -1187,7 +1187,7 @@ const Login: React.FC = () => {
         <input value={email} onChange={(e) => setEmail(e.target.value)} className="w-full mb-4 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
         <label className="block text-sm mb-1">Senha</label>
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full mb-6 p-2 rounded bg-[#E8F0FE] text-black placeholder-black/60 border border-[#E8F0FE]" />
-        <button disabled={(loading) || (unidadeDraft?.status_vendas === "Vendido" || status === "Vendido")} className="w-full py-2 rounded bg-black text-white hover:opacity-90 disabled:opacity-60">
+        <button disabled={(loading) || (status === "Vendido" || status === "Vendido")} className="w-full py-2 rounded bg-black text-white hover:opacity-90 disabled:opacity-60">
           {loading ? "Entrando..." : "Entrar"}
         </button>
       </form>
