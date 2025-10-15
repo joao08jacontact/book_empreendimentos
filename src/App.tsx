@@ -26,16 +26,6 @@ import {
 } from "./lib/firebase";
 
 import {
-
-    const url = `${window.location.origin}${window.location.pathname}?reserva=1&rowname=${encodeURIComponent(id)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-  } catch (e) {
-    console.error('Falha ao abrir aba de reserva:', e);
-  }
-}
-
-
-
   getFirestore,
   collection,
   onSnapshot,
@@ -45,6 +35,7 @@ import {
   updateDoc,
   addDoc,
 } from "firebase/firestore";
+
 
 // Helper global: abre a aba de reserva (?reserva=1&rowname=...)
 function abrirFormularioReservaNovaAba(rowname?: string) {
