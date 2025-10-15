@@ -46,6 +46,12 @@ function abrirFormularioReservaNovaAba(rowname?: string) {
       return;
     }
 
+    const url = `${window.location.origin}${window.location.pathname}?reserva=1&rowname=${encodeURIComponent(id)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch (e) {
+    console.error('Falha ao abrir aba de reserva:', e);
+  }
+}
 
 // ==== ERP helpers (seguro p/ TypeScript) ====
 const ERP_BASE: string = (import.meta.env.VITE_ERP_BASE_URL || '').replace(/\/$/, '');
