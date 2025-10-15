@@ -26,20 +26,6 @@ import {
 } from "./lib/firebase";
 
 import {
-
-// ==== Globais de notificação entre abas (não dependem de estado local) ====
-function __notifyAndRefresh__(maybeRow?: any) {
-  // Usa o que estiver disponível no escopo atual, sem exigir que a var exista
-  const rn =
-    (typeof maybeRow !== 'undefined' && (maybeRow as any)) ||
-    (typeof rowname !== 'undefined' && (rowname as any)) ||
-    (typeof unidadeDraft !== 'undefined' && (unidadeDraft as any)?.erp_rowname) ||
-    (typeof erpRowId !== 'undefined' && (erpRowId as any)) ||
-    '';
-  try { localStorage.setItem('erp:unit:updated', `${rn}:${Date.now()}`); } catch {}
-}
-// ==== /Globais ====
-
   getFirestore,
   collection,
   onSnapshot,
@@ -49,23 +35,6 @@ function __notifyAndRefresh__(maybeRow?: any) {
   updateDoc,
   addDoc,
 } from "firebase/firestore";
-
-
-// Helper global: abre a aba de reserva (?reserva=1&rowname=...)
-function abrirFormularioReservaNovaAba(rowname?: string) {
-  try {
-    const id = (rowname || '').trim();
-    if (!id) {
-      alert('Informe/importe o ID único (ERP) para reservar');
-      return;
-    }
-
-    const url = `${window.location.origin}${window.location.pathname}?reserva=1&rowname=${encodeURIComponent(id)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-  } catch (e) {
-    console.error('Falha ao abrir aba de reserva:', e);
-  }
-}
 
 // ==== ERP helpers (seguro p/ TypeScript) ====
 const ERP_BASE: string = (import.meta.env.VITE_ERP_BASE_URL || '').replace(/\/$/, '');
