@@ -110,7 +110,7 @@ function ReservaPage() {
     setLoading(true);
     try {
       const m = await erpToggleReserva(rowname, true, form);
-      await __notifyAndRefreshLocal__(rowname);
+      await __notifyAndRefresh__();
       if (m?.ok) setMsg("Reserva registrada com sucesso!");
       else setErr("Falha ao registrar reserva");
     } catch (e: any) {
@@ -486,7 +486,7 @@ const EmpreendimentosView: React.FC<{
                             }
                             try {
                               await erpToggleReserva(u.erp_rowname, false);
-                              await __notifyAndRefreshLocal__(rowname);
+                              await __notifyAndRefresh__();
       // Atualiza localmente
                               (u as any).status_vendas = "Disponivel";
                               // força re-render
@@ -621,7 +621,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     } catch {}
   }
 
-  async function __notifyAndRefreshLocal__(rowname?: string) {
+  async function __notifyAndRefresh__(rowname?: string) {
     const rn = (rowname || unidadeDraft?.erp_rowname || erpRowId || '') + '';
     if (rn) {
       try { localStorage.setItem('erp:unit:updated', `${rn}:${Date.now()}`); } catch {}
@@ -673,7 +673,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
       alert("ID único (ERP) vazio nesta unidade.");
       return;
     }
-  function __abrirReservaLocal__(rowname?: string) {
+  function abrirFormularioReservaNovaAba(rowname?: string) {
     const id = (rowname || unidadeDraft?.erp_rowname || erpRowId || "").trim();
     if (!id) {
       alert("Informe/importe o ID único (ERP) para reservar.");
@@ -686,7 +686,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     const reservar = estadoAtual !== "Reservado";
     try {
       await erpToggleReserva(rowname, reservar);
-      await __notifyAndRefreshLocal__(rowname);
+      await __notifyAndRefresh__();
       setUnidadeDraft((prev) => ({
         ...prev,
         status_vendas: reservar ? "Reservado" : "Disponivel",
@@ -915,7 +915,7 @@ return (
                   "ml-2 px-3 py-1 rounded text-white " +
                   (unidadeDraft.status_vendas === "Reservado" ? "bg-slate-600" : "bg-blue-600")
                 }
-                onClick={() => { const _st = (status as any) || status; const _rn = (unidadeDraft?.erp_rowname || erpRowId || "").trim(); if (_st==="Vendido") return; if (_st==="Reservado") { handleToggleReservaAtual(_rn, _st as any); } else { __abrirReservaLocal__(_rn); } }}
+                onClick={() => { const _st = (status as any) || status; const _rn = (unidadeDraft?.erp_rowname || erpRowId || "").trim(); if (_st==="Vendido") return; if (_st==="Reservado") { handleToggleReservaAtual(_rn, _st as any); } else { abrirFormularioReservaNovaAba(_rn); } }}
                 disabled={(!unidadeDraft.erp_rowname) || ((status as any) === "Vendido" || (status as any) === "Vendido")}
                 title={!unidadeDraft.erp_rowname ? "Informe/importe o ID único (ERP) para reservar" : ""}
               >
@@ -1287,9 +1287,6 @@ const Login: React.FC = () => {
 
 // ----------------- App -----------------
 export default function App() {
-  // aliases locais para garantir visibilidade dos helpers no escopo do componente
-  const __notifyAndRefreshLocal__ = React.useCallback((rn?: string) => __notifyAndRefreshLocal__(rn), []);
-  const __abrirReservaLocal__ = React.useCallback((rn?: string) => __abrirReservaLocal__(rn), []);
 
   const q = new URLSearchParams(window.location.search);
   if (q.get("reserva") === "1") return (<ReservaPage />);
