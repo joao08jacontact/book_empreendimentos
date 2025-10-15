@@ -292,6 +292,43 @@ const EmpreendimentosView: React.FC<{
     return (selected as any).unidades ?? [];
   }, [selected]);
 
+  // ==== Auto-sync de status com ERP (polling/focus) ====
+  useEffect(() => {
+    let timer: any;
+    async function tick() {
+      try {
+        const ids = (selectedUnidades || []).map((u: any) => u.erp_rowname).filter(Boolean);
+        if (!ids.length) return;
+        const updates: Record<string, any> = {};
+        for (const id of ids) {
+          try {
+            const m = await erpGetUnidadeByRowname(id);
+            updates[id] = m?.status_vendas || 'Disponivel';
+          } catch {}
+        }
+        if (Object.keys(updates).length) {
+          setSelected(prev => {
+            if (!prev) return prev;
+            const nu = (prev as any).unidades?.map((u: any) => {
+              if (u?.erp_rowname && updates[u.erp_rowname] && u.status_vendas !== updates[u.erp_rowname]) {
+                return { ...u, status_vendas: updates[u.erp_rowname] as any };
+              }
+              return u;
+            }) || [];
+            return { ...(prev as any), unidades: nu } as any;
+          });
+        }
+      } catch {}
+    }
+    function onFocus() { tick(); }
+    window.addEventListener('focus', onFocus);
+    timer = setInterval(tick, 15000);
+    tick();
+    return () => { window.removeEventListener('focus', onFocus); clearInterval(timer); };
+  }, [selected?.id]);
+  // ==== /Auto-sync ====
+
+
   return (
     <div className="space-y-6">
       {!selected && <h1 className="text-3xl font-semibold">Empreendimentos</h1>}
@@ -560,50 +597,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
   }
   // ==== /Ações ERP ====
 
-  // ==== Auto-sync de status com ERP (polling/focus) ====
-  React.useEffect(() => {
-    let timer: any;
-
-    async function tick() {
-      try {
-        const ids = (selected?.unidades || []).map((u: any) => u.erp_rowname).filter(Boolean);
-        if (ids.length === 0) return;
-        const updates: Record<string, any> = {};
-        for (const id of ids) {
-          try {
-            const m = await erpGetUnidadeByRowname(id);
-            updates[id] = m?.status_vendas || 'Disponivel';
-          } catch {}
-        }
-        if (Object.keys(updates).length) {
-          setSelected(prev => {
-            if (!prev) return prev as any;
-            const copy: any = { ...prev, unidades: (prev as any).unidades?.map((u: any) => {
-              if (u.erp_rowname && updates[u.erp_rowname] && u.status_vendas !== updates[u.erp_rowname]) {
-                return { ...u, status_vendas: updates[u.erp_rowname] as any };
-              }
-              return u;
-            }) || [] };
-            return copy;
-          });
-          setUnidadeDraft(prev => {
-            if (prev?.erp_rowname && updates[prev.erp_rowname]) {
-              return { ...prev, status_vendas: updates[prev.erp_rowname] as any };
-            }
-            return prev;
-          });
-        }
-      } catch {}
-    }
-
-    function onFocus() { tick(); }
-    window.addEventListener('focus', onFocus);
-    timer = setInterval(tick, 15000);
-    tick();
-
-    return () => { window.removeEventListener('focus', onFocus); clearInterval(timer); };
-  }, [selected?.id]);
-  // ==== /Auto-sync ====
+  
 
 
   const onChangeField = (k: keyof EmpreendimentoForm, v: any) =>
