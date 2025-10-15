@@ -26,6 +26,15 @@ import {
 } from "./lib/firebase";
 
 import {
+  getFirestore,
+  collection,
+  onSnapshot,
+  orderBy,
+  query,
+  doc as docRef,
+  updateDoc,
+  addDoc,
+} from "firebase/firestore";
 
 // ====== Helpers globais (definidos logo após imports) ======
 function __notifyAndRefresh__(maybeRow?: any): void {
@@ -51,15 +60,6 @@ function abrirFormularioReservaNovaAba(rowname?: string): void {
 }
 // ====== /Helpers globais ======
 
-  getFirestore,
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-  doc as docRef,
-  updateDoc,
-  addDoc,
-} from "firebase/firestore";
 
 // ==== ERP helpers (seguro p/ TypeScript) ====
 const ERP_BASE: string = (import.meta.env.VITE_ERP_BASE_URL || '').replace(/\/$/, '');
