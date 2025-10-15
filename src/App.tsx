@@ -27,14 +27,6 @@ import {
 
 import {
 
-// Helper global: abre a aba de reserva (?reserva=1&rowname=...)
-function abrirFormularioReservaNovaAba(rowname?: string) {
-  try {
-    const id = (rowname || '').trim();
-    if (!id) {
-      alert('Informe/importe o ID único (ERP) para reservar');
-      return;
-    }
     const url = `${window.location.origin}${window.location.pathname}?reserva=1&rowname=${encodeURIComponent(id)}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   } catch (e) {
@@ -53,6 +45,16 @@ function abrirFormularioReservaNovaAba(rowname?: string) {
   updateDoc,
   addDoc,
 } from "firebase/firestore";
+
+// Helper global: abre a aba de reserva (?reserva=1&rowname=...)
+function abrirFormularioReservaNovaAba(rowname?: string) {
+  try {
+    const id = (rowname || '').trim();
+    if (!id) {
+      alert('Informe/importe o ID único (ERP) para reservar');
+      return;
+    }
+
 
 // ==== ERP helpers (seguro p/ TypeScript) ====
 const ERP_BASE: string = (import.meta.env.VITE_ERP_BASE_URL || '').replace(/\/$/, '');
