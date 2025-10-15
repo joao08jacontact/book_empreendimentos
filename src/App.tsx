@@ -127,6 +127,7 @@ function ReservaPage() {
     setLoading(true);
     try {
       const m = await erpToggleReserva(rowname, true, form);
+      await __notifyAndRefresh__(rowname);
       if (m?.ok) setMsg("Reserva registrada com sucesso!");
       else setErr("Falha ao registrar reserva");
     } catch (e: any) {
@@ -502,7 +503,8 @@ const EmpreendimentosView: React.FC<{
                             }
                             try {
                               await erpToggleReserva(u.erp_rowname, false);
-                              // Atualiza localmente
+                              await __notifyAndRefresh__(rowname);
+      // Atualiza localmente
                               (u as any).status_vendas = "Disponivel";
                               // força re-render
                               setSelected((prev) => (prev ? { ...prev } as any : prev));
@@ -592,6 +594,59 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     erp_rowname: undefined,
     status_vendas: undefined,
   });
+  // ==== Helpers de sincronização com ERP ====
+  async function __erpGetUnidadeForSync__(rowname: string) {
+    const url = `/api/erp-proxy?kind=get_unidade&rowname=${encodeURIComponent((rowname || '').trim())}`;
+    const res = await fetch(url, { credentials: 'include' });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = (json && (json.message || json.exc || json._server_messages || json.error)) || 'Falha ERP';
+      throw new Error(typeof msg === 'string' ? msg : 'Falha ERP');
+    }
+    return json?.message || json;
+  }
+
+  function __mergeDraftWithERP__(prev: any, m: any) {
+    if (!m) return prev;
+    return {
+      ...prev,
+      erp_rowname: m.rowname ?? prev?.erp_rowname,
+      status_vendas: (m.status_vendas as any) ?? prev?.status_vendas,
+      titulo: m.unidade ?? prev?.titulo,
+      n_unidade: m.n_unidade ?? prev?.n_unidade,
+      area_privativa_m2: m.area_priv ?? prev?.area_privativa_m2,
+      area_comum_m2: m.area_comum ?? prev?.area_comum_m2,
+      area_aberta_m2: m.area_aberta ?? prev?.area_aberta_m2,
+      total_m2: m.total_m2 ?? prev?.total_m2,
+      preco_interno_rs: m.preco_interno ?? prev?.preco_interno_rs,
+      preco_externo_rs: m.preco_externo ?? prev?.preco_externo_rs,
+      total_rs: m.total_rs ?? prev?.total_rs,
+      entrada_rs: m.entrada_rs ?? prev?.entrada_rs,
+      reforco_rs: m.reforco_rs ?? prev?.reforco_rs,
+      parcelas_rs: m.parcelas_rs ?? prev?.parcelas_rs,
+      entrega_chaves_rs: m.entrega_rs ?? prev?.entrega_chaves_rs,
+    };
+  }
+
+  async function __refreshUnidadeFromERP__(forcedRowname?: string) {
+    const r = (forcedRowname || unidadeDraft?.erp_rowname || erpRowId || '') + '';
+    const row = r.trim();
+    if (!row) return;
+    try {
+      const m = await __erpGetUnidadeForSync__(row);
+      setUnidadeDraft(prev => __mergeDraftWithERP__(prev, m));
+    } catch {}
+  }
+
+  async function __notifyAndRefresh__(rowname?: string) {
+    const rn = (rowname || unidadeDraft?.erp_rowname || erpRowId || '') + '';
+    if (rn) {
+      try { localStorage.setItem('erp:unit:updated', `${rn}:${Date.now()}`); } catch {}
+      await __refreshUnidadeFromERP__(rn);
+    }
+  }
+  // ==== /Helpers ====
+
 
   // Estados pedidos para integração ERP
   const [erpRowId, setErpRowId] = React.useState<string>("");
@@ -648,6 +703,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     const reservar = estadoAtual !== "Reservado";
     try {
       await erpToggleReserva(rowname, reservar);
+      await __notifyAndRefresh__(rowname);
       setUnidadeDraft((prev) => ({
         ...prev,
         status_vendas: reservar ? "Reservado" : "Disponivel",
@@ -742,7 +798,37 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     }
   };
 
-  return (
+  
+  // ==== Auto-sync (polling + foco + storage entre abas) ====
+  React.useEffect(() => {
+    let timer: any;
+    async function tick() {
+      const r = (unidadeDraft?.erp_rowname || erpRowId || '') + '';
+      if (!r.trim()) return;
+      await __refreshUnidadeFromERP__(r);
+    }
+    function onVisibility() {
+      if (document.visibilityState === 'visible') tick();
+    }
+    function onStorage(ev: StorageEvent) {
+      if (ev.key !== 'erp:unit:updated') return;
+      const value = String(ev.newValue || '');
+      const [rn] = value.split(':');
+      const current = (unidadeDraft?.erp_rowname || erpRowId || '') + '';
+      if (rn && current && rn === current) tick();
+    }
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('storage', onStorage);
+    timer = setInterval(tick, 20000);
+    tick();
+    return () => {
+      if (timer) clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [unidadeDraft?.erp_rowname, erpRowId]);
+  // ==== /Auto-sync ====
+return (
     <div className="space-y-6">
       {/* Cabeçalho */}
       <h1 className="text-3xl font-semibold">{form.id ? "Editar Empreendimento" : "Cadastrar Empreendimento"}</h1>
