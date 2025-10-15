@@ -38,25 +38,16 @@ import {
 
 // ====== Helpers globais (definidos logo após imports) ======
 function __notifyAndRefresh__(maybeRow?: any): void {
-  const rn =
-    (typeof maybeRow !== 'undefined' && (maybeRow as any)) ||
-    (typeof rowname !== 'undefined' && (rowname as any)) ||
-    (typeof unidadeDraft !== 'undefined' && (unidadeDraft as any)?.erp_rowname) ||
-    (typeof erpRowId !== 'undefined' && (erpRowId as any)) ||
-    '';
+  const rn = typeof maybeRow !== 'undefined' && maybeRow != null ? String(maybeRow) : '';
   if (!rn) return;
   try { localStorage.setItem('erp:unit:updated', `${rn}:${Date.now()}`); } catch {}
 }
 
-function abrirFormularioReservaNovaAba(rowname?: string): void {
-  try {
-    const id = (rowname || (typeof unidadeDraft !== 'undefined' && (unidadeDraft as any)?.erp_rowname) || (typeof erpRowId !== 'undefined' && (erpRowId as any)) || '').trim();
-    if (!id) { alert('Informe/importe o ID único (ERP) para reservar'); return; }
-    const url = `${window.location.origin}${window.location.pathname}?reserva=1&rowname=${encodeURIComponent(id)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-  } catch (e) {
-    console.error('Falha ao abrir aba de reserva:', e);
-  }
+function abrirFormularioReservaNovaAba(id?: string): void {
+  const rn = (id || '').trim();
+  if (!rn) { alert('Informe/importe o ID único (ERP) para reservar'); return; }
+  const url = `${window.location.origin}${window.location.pathname}?reserva=1&rowname=${encodeURIComponent(rn)}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 // ====== /Helpers globais ======
 
