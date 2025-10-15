@@ -52,107 +52,40 @@ function erpHeaders(extra?: Record<string, string>): HeadersInit {
 }
 
 /** GET unidade por rowname */
+
 async function erpGetUnidadeByRowname(rowname: string) {
+  if (!rowname) throw new Error('rowname vazio');
   const url = `/api/erp-proxy?kind=get_unidade&rowname=${encodeURIComponent(rowname.trim())}`;
+  const res = await fetch(url, { headers: erpHeaders(), credentials: 'same-origin' });
+  const json = await res.json();
+  if (!res.ok) {
+    const msg = (json && (json.message || json.exc || json._server_messages)) || 'Falha ERP';
+    throw new Error(typeof msg === 'string' ? msg : 'Falha ERP');
+  }
+  return json?.message || json;
+}
+
+
+/** POST reservar/desfazer no ERP */
+
+async function erpToggleReserva(rowname: string, reservar: boolean) {
+  const url = `/api/erp-proxy?kind=${reservar ? 'create_reserva' : 'toggle_reserva'}`;
+  const payload: any = { rowname, reservado: reservar ? 1 : 0 };
   const res = await fetch(url, {
-    credentials: 'include',
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = (json && (json.message || json.exc || json._server_messages)) || 'Falha ERP';
-    throw new Error(typeof msg === 'string' ? msg : 'Falha ERP');
-  }
-  return json?.message || json;
-}
-
-/** POST reservar/desfazer usando o Proxy (cria reserva quando reservado=1, desfaz quando 0) */
-async function erpToggleReserva(rowname: string, reservar: boolean, extra?: Record<string, any>) {
-  const res = await fetch('/api/erp-proxy?kind=create_reserva', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ rowname, reservado: reservar ? 1 : 0, ...(extra || {}) }),
+    headers: erpHeaders({ 'Content-Type': 'application/json' }),
+    credentials: 'same-origin',
+    body: JSON.stringify(payload),
   });
-  const json = await res.json().catch(() => ({}));
+  const json = await res.json();
   if (!res.ok) {
-    const msg = (json && (json.message || json.exc || json._server_messages)) || 'Falha ERP';
+    const msg = (json && (json.message || json.exc || json._server_messages || json.error)) || 'Falha ERP';
     throw new Error(typeof msg === 'string' ? msg : 'Falha ERP');
   }
   return json?.message || json;
 }
+
 // ==== /ERP helpers ====
-// ==== Página simples de Reserva (abre por ?reserva=1&rowname=...) ====
-function useQuery() {
-  const [q] = React.useState(() => new URLSearchParams(window.location.search));
-  return q;
-}
-
-function ReservaPage() {
-  const q = useQuery();
-  const rowname = (q.get("rowname") || "").trim();
-  const [loading, setLoading] = React.useState(false);
-  const [msg, setMsg] = React.useState<string | null>(null);
-  const [err, setErr] = React.useState<string | null>(null);
-  const [form, setForm] = React.useState({
-    nome_corretor: "",
-    nome_cliente: "",
-    email: "",
-    rh: "",
-    cnpjcpf: "",
-    telefone: "",
-    observacao: "",
-  });
-  const onChange = (k: keyof typeof form) => (e: any) => setForm(v => ({...v, [k]: e.target.value}));
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg(null); setErr(null);
-    if (!rowname) { setErr("ID (rowname) ausente."); return; }
-    setLoading(true);
-    try {
-      const m = await erpToggleReserva(rowname, true, form);
-      if (m?.ok) setMsg("Reserva registrada com sucesso!");
-      else setErr("Falha ao registrar reserva");
-    } catch (e: any) {
-      setErr(e?.message || "Falha");
-    } finally {
-      setLoading(false);
-    }
-  }
-  return (
-    <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-2xl font-semibold mb-4">Reserva da Unidade</h1>
-      <div className="text-sm text-gray-600 mb-3"><b>ID:</b> {rowname || '-'}</div>
-      <form onSubmit={onSubmit} className="space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div><label className="block text-sm font-medium">Nome do Corretor</label>
-            <input className="border rounded px-3 py-2 w-full" value={form.nome_corretor} onChange={onChange('nome_corretor')} /></div>
-          <div><label className="block text-sm font-medium">Nome do Cliente</label>
-            <input className="border rounded px-3 py-2 w-full" value={form.nome_cliente} onChange={onChange('nome_cliente')} /></div>
-          <div><label className="block text-sm font-medium">Email</label>
-            <input className="border rounded px-3 py-2 w-full" type="email" value={form.email} onChange={onChange('email')} /></div>
-          <div><label className="block text-sm font-medium">RG</label>
-            <input className="border rounded px-3 py-2 w-full" value={form.rh} onChange={onChange('rh')} /></div>
-          <div><label className="block text-sm font-medium">CPF/CNPJ</label>
-            <input className="border rounded px-3 py-2 w-full" value={form.cnpjcpf} onChange={onChange('cnpjcpf')} /></div>
-          <div><label className="block text-sm font-medium">Telefone</label>
-            <input className="border rounded px-3 py-2 w-full" value={form.telefone} onChange={onChange('telefone')} placeholder="(11) 99999-0000 ou +55 11 99999-0000" /></div>
-        </div>
-        <div><label className="block text-sm font-medium">Observação</label>
-          <textarea className="border rounded px-3 py-2 w-full min-h-[80px]" value={form.observacao} onChange={onChange('observacao')} /></div>
-        {err && <div className="text-red-600 text-sm">{err}</div>}
-        {msg && <div className="text-green-700 text-sm">{msg}</div>}
-        <div className="flex gap-2 pt-2">
-          <button type="submit" disabled={loading || !rowname} className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-60">
-            {loading ? "Enviando..." : "Reservar"}
-          </button>
-          <a href="/" className="px-4 py-2 rounded border border-gray-300 text-gray-700">Voltar</a>
-        </div>
-      </form>
-    </div>
-  );
-}
-// ==== /Página de Reserva ====
-
 
 
 function verFotosUnidade(u: any) {
@@ -478,15 +411,11 @@ const EmpreendimentosView: React.FC<{
                               alert("Informe/importe o ID único (ERP) para reservar");
                               return;
                             }
-                            if (status !== "Reservado") {
-                              const href = `${window.location.origin}${window.location.pathname}?reserva=1&rowname=${encodeURIComponent(u.erp_rowname)}`;
-                              window.open(href, "_blank", "noopener,noreferrer");
-                              return;
-                            }
+                            const reservar = status !== "Reservado";
                             try {
-                              await erpToggleReserva(u.erp_rowname, false);
+                              await erpToggleReserva(u.erp_rowname, reservar);
                               // Atualiza localmente
-                              (u as any).status_vendas = "Disponivel";
+                              (u as any).status_vendas = reservar ? "Reservado" : "Disponivel";
                               // força re-render
                               setSelected((prev) => (prev ? { ...prev } as any : prev));
                             } catch (e: any) {
@@ -630,6 +559,52 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
     }
   }
   // ==== /Ações ERP ====
+
+  // ==== Auto-sync de status com ERP (polling/focus) ====
+  React.useEffect(() => {
+    let timer: any;
+
+    async function tick() {
+      try {
+        const ids = (selected?.unidades || []).map((u: any) => u.erp_rowname).filter(Boolean);
+        if (ids.length === 0) return;
+        const updates: Record<string, any> = {};
+        for (const id of ids) {
+          try {
+            const m = await erpGetUnidadeByRowname(id);
+            updates[id] = m?.status_vendas || 'Disponivel';
+          } catch {}
+        }
+        if (Object.keys(updates).length) {
+          setSelected(prev => {
+            if (!prev) return prev as any;
+            const copy: any = { ...prev, unidades: (prev as any).unidades?.map((u: any) => {
+              if (u.erp_rowname && updates[u.erp_rowname] && u.status_vendas !== updates[u.erp_rowname]) {
+                return { ...u, status_vendas: updates[u.erp_rowname] as any };
+              }
+              return u;
+            }) || [] };
+            return copy;
+          });
+          setUnidadeDraft(prev => {
+            if (prev?.erp_rowname && updates[prev.erp_rowname]) {
+              return { ...prev, status_vendas: updates[prev.erp_rowname] as any };
+            }
+            return prev;
+          });
+        }
+      } catch {}
+    }
+
+    function onFocus() { tick(); }
+    window.addEventListener('focus', onFocus);
+    timer = setInterval(tick, 15000);
+    tick();
+
+    return () => { window.removeEventListener('focus', onFocus); clearInterval(timer); };
+  }, [selected?.id]);
+  // ==== /Auto-sync ====
+
 
   const onChangeField = (k: keyof EmpreendimentoForm, v: any) =>
     setForm((prev) => ({ ...prev, [k]: v }));
@@ -820,7 +795,7 @@ function CadastrarView({ editing, onSaved, onCancel }: CadastrarViewProps) {
                   (unidadeDraft.status_vendas === "Reservado" ? "bg-slate-600" : "bg-blue-600")
                 }
                 onClick={() => handleToggleReservaAtual(unidadeDraft.erp_rowname, unidadeDraft.status_vendas)}
-                disabled={!unidadeDraft.erp_rowname}
+                disabled={!unidadeDraft.erp_rowname || unidadeDraft.status_vendas==='Vendido' }
                 title={!unidadeDraft.erp_rowname ? "Informe/importe o ID único (ERP) para reservar" : ""}
               >
                 {unidadeDraft.status_vendas === "Reservado" ? "Desfazer" : "Reservar"}
@@ -1191,9 +1166,6 @@ const Login: React.FC = () => {
 
 // ----------------- App -----------------
 export default function App() {
-  const q = new URLSearchParams(window.location.search);
-  if (q.get("reserva") === "1") return (<ReservaPage />);
-
   const [firebaseReady, setFirebaseReady] = useState(false);
   const [userDoc, setUserDoc] = useState<AppUserDoc | null>(null);
   const [empList, setEmpList] = useState<(Emp & { id: string })[]>([]);
