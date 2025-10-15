@@ -26,6 +26,20 @@ import {
 } from "./lib/firebase";
 
 import {
+
+// ==== Globais de notificação entre abas (não dependem de estado local) ====
+function __notifyAndRefresh__(maybeRow?: any) {
+  // Usa o que estiver disponível no escopo atual, sem exigir que a var exista
+  const rn =
+    (typeof maybeRow !== 'undefined' && (maybeRow as any)) ||
+    (typeof rowname !== 'undefined' && (rowname as any)) ||
+    (typeof unidadeDraft !== 'undefined' && (unidadeDraft as any)?.erp_rowname) ||
+    (typeof erpRowId !== 'undefined' && (erpRowId as any)) ||
+    '';
+  try { localStorage.setItem('erp:unit:updated', `${rn}:${Date.now()}`); } catch {}
+}
+// ==== /Globais ====
+
   getFirestore,
   collection,
   onSnapshot,
