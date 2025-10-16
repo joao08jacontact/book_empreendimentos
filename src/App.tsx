@@ -370,6 +370,47 @@ const EmpreendimentosView: React.FC<{
   onEditRequest: (emp: Emp & { id: string }) => void;
 }> = ({ data, isAdmin, onDelete, onEditRequest }) => {
   const [selected, setSelected] = useState<(Emp & { id: string }) | null>(null);
+
+  // ==== Auto-correção de status (lista de unidades do empreendimento selecionado) ====
+  React.useEffect(() => {
+    if (!selected) return;
+    const unidades: any[] = ((selected as any).unidades || []).slice(0);
+    let cancelled = false;
+
+    async function fetchERP(rowname: string) {
+      const url = `/api/erp-proxy?kind=get_unidade&rowname=${encodeURIComponent((rowname||'').trim())}`;
+      const res = await fetch(url, { credentials: 'include' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json && (json.message||json.exc||json._server_messages||json.error)) || 'Falha ERP');
+      return json?.message || json;
+    }
+
+    async function align() {
+      for (let i = 0; i < unidades.length; i++) {
+        if (cancelled) return;
+        const u = unidades[i];
+        const rn = (u && (u.erp_rowname || u.rowname || u.row_name)) + '';
+        if (!rn || !rn.trim()) continue;
+        try {
+          const m = await fetchERP(rn);
+          const novo = String(m?.status_vendas || '').toLowerCase();
+          const atual = String(u?.status_vendas || '').toLowerCase();
+          if (novo && novo !== atual) {
+            // Atualiza no estado local do empreendimento selecionado (efeito imediato no Book)
+            (u as any).status_vendas = m.status_vendas;
+            // dispare re-render
+            setSelected(prev => prev ? ({ ...(prev as any) }) : prev);
+          }
+        } catch {}
+        await new Promise(r => setTimeout(r, 250)); // respiro p/ evitar burst
+      }
+    }
+
+    const timer = setInterval(align, 20000);
+    align();
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [selected]);
+  // ==== /Auto-correção de status ====
   const selectedUnidades: Unidade[] = useMemo(() => {
     if (!selected) return [];
     // Emp do Firestore pode não declarar, então tratamos como any
